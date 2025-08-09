@@ -5,20 +5,30 @@ import PackageDescription
 
 let package = Package(
     name: "swift-memory",
+    platforms: [
+        .macOS(.v15),
+        .iOS(.v18)
+    ],
     products: [
-        // Products define the executables and libraries a package produces, making them visible to other packages.
         .library(
-            name: "swift-memory",
-            targets: ["swift-memory"]),
+            name: "SwiftMemory",
+            targets: ["SwiftMemory"]),
+    ],
+    dependencies: [
+        .package(url: "https://github.com/1amageek/kuzu-swift-extension.git", branch: "main"),
+        .package(url: "https://github.com/1amageek/OpenFoundationModels.git", branch: "main")
     ],
     targets: [
-        // Targets are the basic building blocks of a package, defining a module or a test suite.
-        // Targets can depend on other targets in this package and products from dependencies.
         .target(
-            name: "swift-memory"),
+            name: "SwiftMemory",
+            dependencies: [
+                .product(name: "KuzuSwiftExtension", package: "kuzu-swift-extension"),
+                .product(name: "KuzuSwiftMacros", package: "kuzu-swift-extension"),
+                .product(name: "OpenFoundationModels", package: "OpenFoundationModels")
+            ]),
         .testTarget(
-            name: "swift-memoryTests",
-            dependencies: ["swift-memory"]
+            name: "SwiftMemoryTests",
+            dependencies: ["SwiftMemory"]
         ),
     ]
 )
