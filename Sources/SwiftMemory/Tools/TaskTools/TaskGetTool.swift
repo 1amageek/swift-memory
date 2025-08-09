@@ -12,10 +12,21 @@ public struct TaskGetTool: Tool {
     
     public func call(arguments: Arguments) async throws -> MemoryToolResult {
         do {
-            if arguments.includeInfo == true {
+            // Support new include options
+            if let include = arguments.include {
+                let fullInfo = try await TaskManager.shared.getWithIncludes(
+                    taskID: arguments.taskID,
+                    include: include
+                )
+                return .taskFullInfo(fullInfo)
+            }
+            // Backward compatibility: includeInfo flag
+            else if arguments.includeInfo == true {
                 let taskInfo = try await TaskManager.shared.getTaskInfo(taskID: arguments.taskID)
                 return .taskInfo(taskInfo)
-            } else {
+            }
+            // Default: just return the task
+            else {
                 let task = try await TaskManager.shared.get(id: arguments.taskID)
                 return .taskRetrieved(task)
             }

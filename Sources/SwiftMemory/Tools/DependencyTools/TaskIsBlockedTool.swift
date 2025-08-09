@@ -1,6 +1,7 @@
 import Foundation
 import OpenFoundationModels
 
+@available(*, deprecated, message: "Use DependencyGetTool with type: .isBlocked instead")
 public struct TaskIsBlockedTool: Tool {
     public let name = "memory.task.isBlocked"
     public let description = "Check if a task is currently blocked by active dependencies"

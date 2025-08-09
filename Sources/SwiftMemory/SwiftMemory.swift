@@ -5,22 +5,29 @@ import OpenFoundationModels
 
 // MARK: - Tool Collection
 public let memoryTools: [any Tool] = [
-    // Session Tools
+    // Session Tools (5)
     SessionCreateTool(),
     SessionGetTool(),
     SessionListTool(),
     SessionUpdateTool(),
     SessionDeleteTool(),
-    // Task Tools
+    
+    // Task Tools (6)
     TaskCreateTool(),
-    TaskGetTool(),
-    TaskListTool(),
-    TaskUpdateTool(),
+    TaskGetTool(),      // Enhanced with include options
+    TaskListTool(),     
+    TaskUpdateTool(),   // Enhanced with batch support
     TaskReorderTool(),
     TaskDeleteTool(),
-    // Dependency Tools
-    DependencyAddTool(),
-    DependencyRemoveTool(),
-    DependencyChainTool(),
-    TaskIsBlockedTool()
+    
+    // Dependency Tools - New Unified (2)
+    DependencySetTool(),  // Replaces add/remove
+    DependencyGetTool(),  // Replaces chain/isBlocked
+    
+    // Deprecated - kept for backward compatibility
+    // Uncomment if you need backward compatibility:
+    // DependencyAddTool(),      // Use DependencySetTool instead
+    // DependencyRemoveTool(),   // Use DependencySetTool instead
+    // DependencyChainTool(),    // Use DependencyGetTool instead
+    // TaskIsBlockedTool()       // Use DependencyGetTool instead
 ]

@@ -1,6 +1,7 @@
 import Foundation
 import OpenFoundationModels
 
+@available(*, deprecated, message: "Use DependencyGetTool with type: .chain instead")
 public struct DependencyChainTool: Tool {
     public let name = "memory.dependency.chain"
     public let description = "Get full dependency chain (upstream/downstream) for a task"

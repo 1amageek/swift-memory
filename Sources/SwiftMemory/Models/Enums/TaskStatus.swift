@@ -17,6 +17,10 @@ public enum TaskStatus: String, Codable, CaseIterable, Sendable {
         }
     }
     
+    public var isActive: Bool {
+        !isCompleted
+    }
+    
     public var displayName: String {
         switch self {
         case .pending:

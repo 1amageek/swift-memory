@@ -35,13 +35,4 @@ public actor GraphDatabaseSetup {
         }
         return try await GraphDatabase.shared.context()
     }
-    
-    public func reset() async throws {
-        // Close existing database
-        try await GraphDatabase.shared.close()
-        
-        // Reinitialize
-        isInitialized = false
-        try await initialize()
-    }
 }

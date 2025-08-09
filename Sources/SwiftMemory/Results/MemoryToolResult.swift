@@ -14,15 +14,19 @@ public enum MemoryToolResult: Codable, Sendable {
     case taskRetrieved(Task)
     case taskList([Task])
     case taskUpdated(Task)
+    case taskBatchUpdated([Task])
     case taskDeleted(UUID)
     case taskReordered(sessionID: UUID, orderedIds: [UUID])
     case taskInfo(TaskInfo)
+    case taskFullInfo(TaskFullInfo)
     
     // Dependency results
     case dependencyAdded(blockerID: UUID, blockedID: UUID)
     case dependencyRemoved(blockerID: UUID, blockedID: UUID)
     case dependencyChain(DependencyChain)
     case taskBlockedStatus(taskID: UUID, isBlocked: Bool)
+    case taskBlockers(taskID: UUID, blockers: [Task])
+    case taskBlocking(taskID: UUID, blocking: [Task])
     
     // Error result
     case error(String)
@@ -102,6 +106,16 @@ extension MemoryToolResult: PromptRepresentable {
             }
             return Prompt(message)
             
+        case .taskBatchUpdated(let tasks):
+            var message = "Updated \(tasks.count) tasks:"
+            for task in tasks.prefix(10) {  // Show first 10 to avoid too long output
+                message += "\n- \(task.title) [\(task.status.displayName)]"
+            }
+            if tasks.count > 10 {
+                message += "\n... and \(tasks.count - 10) more"
+            }
+            return Prompt(message)
+            
         case .taskDeleted(let id):
             return Prompt("Deleted task with ID: \(id)")
             
@@ -134,6 +148,60 @@ extension MemoryToolResult: PromptRepresentable {
             
             return Prompt(message)
             
+        case .taskFullInfo(let info):
+            var message = "Task: '\(info.task.title)' (ID: \(info.task.id))"
+            message += "\nStatus: \(info.task.status.displayName)"
+            message += "\nDifficulty: \(info.task.difficulty)/5"
+            
+            if let desc = info.task.description {
+                message += "\nDescription: \(desc)"
+            }
+            
+            if let assignee = info.task.assignee {
+                message += "\nAssigned to: \(assignee)"
+            }
+            
+            if let session = info.session {
+                message += "\n\nSession: \(session.title)"
+            }
+            
+            if let parent = info.parent {
+                message += "\n\nParent: \(parent.title)"
+            }
+            
+            if let children = info.children, !children.isEmpty {
+                message += "\n\nChildren (\(children.count)):"
+                message += children.map { "\n  - \($0.title)" }.joined()
+            }
+            
+            if let blockers = info.blockers, !blockers.isEmpty {
+                message += "\n\nBlocked by (\(blockers.count)):"
+                message += blockers.map { "\n  - \($0.title) [\($0.status.displayName)]" }.joined()
+            }
+            
+            if let blocking = info.blocking, !blocking.isEmpty {
+                message += "\n\nBlocking (\(blocking.count)):"
+                message += blocking.map { "\n  - \($0.title)" }.joined()
+            }
+            
+            if let chain = info.fullChain {
+                if !chain.upstream.isEmpty {
+                    message += "\n\nFull upstream chain (\(chain.upstream.count)):"
+                    for item in chain.upstream {
+                        message += "\n  " + String(repeating: "  ", count: item.depth - 1) + "- \(item.task.title)"
+                    }
+                }
+                
+                if !chain.downstream.isEmpty {
+                    message += "\n\nFull downstream chain (\(chain.downstream.count)):"
+                    for item in chain.downstream {
+                        message += "\n  " + String(repeating: "  ", count: item.depth - 1) + "- \(item.task.title)"
+                    }
+                }
+            }
+            
+            return Prompt(message)
+            
         // Dependency results
         case .dependencyAdded(let blockerID, let blockedID):
             return Prompt("Added dependency: \(blockerID) blocks \(blockedID)")
@@ -162,6 +230,26 @@ extension MemoryToolResult: PromptRepresentable {
             
         case .taskBlockedStatus(let taskID, let isBlocked):
             return Prompt("Task \(taskID) is \(isBlocked ? "blocked by active dependencies" : "not blocked")")
+            
+        case .taskBlockers(let taskID, let blockers):
+            if blockers.isEmpty {
+                return Prompt("Task \(taskID) has no blockers")
+            }
+            var message = "Task \(taskID) is blocked by \(blockers.count) task(s):"
+            for blocker in blockers {
+                message += "\n- \(blocker.title) [\(blocker.status.displayName)]"
+            }
+            return Prompt(message)
+            
+        case .taskBlocking(let taskID, let blocking):
+            if blocking.isEmpty {
+                return Prompt("Task \(taskID) is not blocking any tasks")
+            }
+            var message = "Task \(taskID) is blocking \(blocking.count) task(s):"
+            for blocked in blocking {
+                message += "\n- \(blocked.title) [\(blocked.status.displayName)]"
+            }
+            return Prompt(message)
             
         // Error
         case .error(let message):

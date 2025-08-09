@@ -1,6 +1,7 @@
 import Foundation
 import OpenFoundationModels
 
+@available(*, deprecated, message: "Use DependencySetTool with action: .remove instead")
 public struct DependencyRemoveTool: Tool {
     public let name = "memory.dependency.remove"
     public let description = "Remove a dependency between tasks"

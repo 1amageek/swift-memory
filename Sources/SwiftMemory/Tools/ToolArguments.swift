@@ -21,7 +21,8 @@ public struct CreateTaskArguments: Codable, ConvertibleFromGeneratedContent {
 }
 
 public struct UpdateTaskArguments: Codable, ConvertibleFromGeneratedContent {
-    public let taskID: UUID
+    public let taskID: UUID?  // Single task update (backward compatibility)
+    public let taskIDs: [UUID]?  // Batch update (new)
     public let update: TaskUpdate
     
     public init(_ content: GeneratedContent) throws {
@@ -43,7 +44,8 @@ public struct TaskUpdate: Codable, Sendable {
 
 public struct GetTaskArguments: Codable, ConvertibleFromGeneratedContent {
     public let taskID: UUID
-    public let includeInfo: Bool?
+    public let includeInfo: Bool? // Deprecated, use include options instead
+    public let include: TaskIncludeOptions?
     
     public init(_ content: GeneratedContent) throws {
         let decoder = JSONDecoder()

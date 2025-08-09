@@ -475,6 +475,116 @@ public actor TaskManager {
         )
     }
     
+    // MARK: - Batch Operations
+    
+    public func updateBatch(
+        taskIDs: [UUID],
+        title: String? = nil,
+        description: String? = nil,
+        status: TaskStatus? = nil,
+        assignee: String? = nil,
+        difficulty: Int? = nil,
+        cancelReason: String? = nil
+    ) async throws -> [Task] {
+        var updatedTasks: [Task] = []
+        
+        // Validate difficulty once if provided
+        if let difficulty = difficulty {
+            guard (1...5).contains(difficulty) else {
+                throw MemoryError.invalidDifficulty(difficulty)
+            }
+        }
+        
+        // Update each task
+        for taskID in taskIDs {
+            do {
+                let updated = try await update(
+                    id: taskID,
+                    title: title,
+                    description: description,
+                    status: status,
+                    assignee: assignee,
+                    difficulty: difficulty,
+                    cancelReason: cancelReason,
+                    parentTaskID: nil  // Don't change parent in batch updates
+                )
+                updatedTasks.append(updated)
+            } catch {
+                // Continue with other tasks even if one fails
+                // Could optionally collect errors and return them
+                continue
+            }
+        }
+        
+        if updatedTasks.isEmpty && !taskIDs.isEmpty {
+            throw MemoryError.databaseError("Failed to update any tasks")
+        }
+        
+        return updatedTasks
+    }
+    
+    // MARK: - Enhanced Get with Include Options
+    
+    public func getWithIncludes(taskID: UUID, include: TaskIncludeOptions?) async throws -> TaskFullInfo {
+        let task = try await get(id: taskID)
+        
+        // Default: return just the task if no includes specified
+        guard let include = include, include.hasAnyEnabled else {
+            return TaskFullInfo(
+                task: task,
+                parent: nil,
+                children: nil,
+                blockers: nil,
+                blocking: nil,
+                fullChain: nil,
+                session: nil
+            )
+        }
+        
+        // Fetch requested information
+        let parent = include.parent == true ? try await getParent(taskID: taskID) : nil
+        let children = include.children == true ? try await getChildren(taskID: taskID) : nil
+        
+        var blockers: [Task]? = nil
+        var blocking: [Task]? = nil
+        if include.dependencies == true {
+            blockers = try await DependencyManager.shared.getBlockers(taskID: taskID)
+            blocking = try await DependencyManager.shared.getBlocking(taskID: taskID)
+        }
+        
+        let fullChain = include.fullChain == true ? 
+            try await DependencyManager.shared.getDependencyChain(taskID: taskID) : nil
+        
+        var session: Session? = nil
+        if include.session == true {
+            let context = try await GraphDatabaseSetup.shared.context()
+            let result = try await context.raw(
+                """
+                MATCH (s:Session)-[:HasTask]->(t:Task {id: $taskID})
+                RETURN s
+                """,
+                bindings: ["taskID": taskID]
+            )
+            
+            if result.hasNext(),
+               let tuple = try result.getNext(),
+               let dict = try? tuple.getAsDictionary(),
+               let sessionDict = dict["s"] as? [String: Any?] {
+                session = try KuzuDecoder().decode(Session.self, from: sessionDict)
+            }
+        }
+        
+        return TaskFullInfo(
+            task: task,
+            parent: parent,
+            children: children,
+            blockers: blockers,
+            blocking: blocking,
+            fullChain: fullChain,
+            session: session
+        )
+    }
+    
     // MARK: - Private Helpers (removed - now using KuzuSwiftExtension declarative APIs)
 }
 
@@ -486,4 +596,14 @@ public struct TaskInfo: Codable, Sendable {
     public let children: [Task]
     public let blockers: [Task]
     public let blocking: [Task]
+}
+
+public struct TaskFullInfo: Codable, Sendable {
+    public let task: Task
+    public let parent: Task?
+    public let children: [Task]?
+    public let blockers: [Task]?
+    public let blocking: [Task]?
+    public let fullChain: DependencyChain?
+    public let session: Session?
 }
