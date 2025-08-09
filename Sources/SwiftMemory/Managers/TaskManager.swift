@@ -458,23 +458,6 @@ public actor TaskManager {
         return children
     }
     
-    public func getTaskInfo(taskID: UUID) async throws -> TaskInfo {
-        let task = try await get(id: taskID)
-        
-        let parent = try await getParent(taskID: taskID)
-        let children = try await getChildren(taskID: taskID)
-        let blockers = try await DependencyManager.shared.getBlockers(taskID: taskID)
-        let blocking = try await DependencyManager.shared.getBlocking(taskID: taskID)
-        
-        return TaskInfo(
-            task: task,
-            parent: parent,
-            children: children,
-            blockers: blockers,
-            blocking: blocking
-        )
-    }
-    
     // MARK: - Batch Operations
     
     public func updateBatch(
@@ -589,14 +572,6 @@ public actor TaskManager {
 }
 
 // MARK: - Supporting Types
-
-public struct TaskInfo: Codable, Sendable {
-    public let task: Task
-    public let parent: Task?
-    public let children: [Task]
-    public let blockers: [Task]
-    public let blocking: [Task]
-}
 
 public struct TaskFullInfo: Codable, Sendable {
     public let task: Task

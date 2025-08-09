@@ -20,14 +20,7 @@ public let memoryTools: [any Tool] = [
     TaskReorderTool(),
     TaskDeleteTool(),
     
-    // Dependency Tools - New Unified (2)
-    DependencySetTool(),  // Replaces add/remove
-    DependencyGetTool(),  // Replaces chain/isBlocked
-    
-    // Deprecated - kept for backward compatibility
-    // Uncomment if you need backward compatibility:
-    // DependencyAddTool(),      // Use DependencySetTool instead
-    // DependencyRemoveTool(),   // Use DependencySetTool instead
-    // DependencyChainTool(),    // Use DependencyGetTool instead
-    // TaskIsBlockedTool()       // Use DependencyGetTool instead
+    // Dependency Tools (2)
+    DependencySetTool(),  // Handles both add and remove
+    DependencyGetTool()   // Handles chain, blockers, blocking, and isBlocked queries
 ]

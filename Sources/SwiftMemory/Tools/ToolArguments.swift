@@ -44,7 +44,6 @@ public struct TaskUpdate: Codable, Sendable {
 
 public struct GetTaskArguments: Codable, ConvertibleFromGeneratedContent {
     public let taskID: UUID
-    public let includeInfo: Bool? // Deprecated, use include options instead
     public let include: TaskIncludeOptions?
     
     public init(_ content: GeneratedContent) throws {
@@ -156,49 +155,4 @@ public struct ListSessionsArguments: Codable, ConvertibleFromGeneratedContent {
 }
 
 // MARK: - Dependency Tool Arguments
-
-public struct AddDependencyArguments: Codable, ConvertibleFromGeneratedContent {
-    public let blockerID: UUID
-    public let blockedID: UUID
-    
-    public init(_ content: GeneratedContent) throws {
-        let decoder = JSONDecoder()
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(content)
-        self = try decoder.decode(Self.self, from: data)
-    }
-}
-
-public struct RemoveDependencyArguments: Codable, ConvertibleFromGeneratedContent {
-    public let blockerID: UUID
-    public let blockedID: UUID
-    
-    public init(_ content: GeneratedContent) throws {
-        let decoder = JSONDecoder()
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(content)
-        self = try decoder.decode(Self.self, from: data)
-    }
-}
-
-public struct GetDependencyChainArguments: Codable, ConvertibleFromGeneratedContent {
-    public let taskID: UUID
-    
-    public init(_ content: GeneratedContent) throws {
-        let decoder = JSONDecoder()
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(content)
-        self = try decoder.decode(Self.self, from: data)
-    }
-}
-
-public struct GetTaskBlockedStatusArguments: Codable, ConvertibleFromGeneratedContent {
-    public let taskID: UUID
-    
-    public init(_ content: GeneratedContent) throws {
-        let decoder = JSONDecoder()
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(content)
-        self = try decoder.decode(Self.self, from: data)
-    }
-}
+// Note: Old dependency arguments removed. Use SetDependencyArguments and GetDependencyArguments from the new tools.

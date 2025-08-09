@@ -20,7 +20,13 @@ public struct SessionCreateTool: Tool {
     }
     
     private static func map(_ error: Error) -> String {
-        if let e = error as? MemoryError, let msg = e.errorDescription { return msg }
+        if let e = error as? MemoryError {
+            var message = e.errorDescription ?? "Unknown error"
+            if let suggestion = e.recoverySuggestion {
+                message += ". \(suggestion)"
+            }
+            return message
+        }
         return "Unexpected error occurred"
     }
 }

@@ -17,7 +17,6 @@ public enum MemoryToolResult: Codable, Sendable {
     case taskBatchUpdated([Task])
     case taskDeleted(UUID)
     case taskReordered(sessionID: UUID, orderedIds: [UUID])
-    case taskInfo(TaskInfo)
     case taskFullInfo(TaskFullInfo)
     
     // Dependency results
@@ -121,32 +120,6 @@ extension MemoryToolResult: PromptRepresentable {
             
         case .taskReordered(let sessionID, let orderedIds):
             return Prompt("Reordered \(orderedIds.count) tasks in session \(sessionID)")
-            
-        case .taskInfo(let info):
-            var message = "Task Info for '\(info.task.title)':"
-            message += "\nStatus: \(info.task.status.displayName)"
-            message += "\nDifficulty: \(info.task.difficulty)/5"
-            
-            if let parent = info.parent {
-                message += "\n\nParent: \(parent.title)"
-            }
-            
-            if !info.children.isEmpty {
-                message += "\n\nChildren (\(info.children.count)):"
-                message += info.children.map { "\n  - \($0.title)" }.joined()
-            }
-            
-            if !info.blockers.isEmpty {
-                message += "\n\nBlocked by (\(info.blockers.count)):"
-                message += info.blockers.map { "\n  - \($0.title) [\($0.status.displayName)]" }.joined()
-            }
-            
-            if !info.blocking.isEmpty {
-                message += "\n\nBlocking (\(info.blocking.count)):"
-                message += info.blocking.map { "\n  - \($0.title)" }.joined()
-            }
-            
-            return Prompt(message)
             
         case .taskFullInfo(let info):
             var message = "Task: '\(info.task.title)' (ID: \(info.task.id))"

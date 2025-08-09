@@ -12,18 +12,13 @@ public struct TaskGetTool: Tool {
     
     public func call(arguments: Arguments) async throws -> MemoryToolResult {
         do {
-            // Support new include options
+            // Support include options for flexible information retrieval
             if let include = arguments.include {
                 let fullInfo = try await TaskManager.shared.getWithIncludes(
                     taskID: arguments.taskID,
                     include: include
                 )
                 return .taskFullInfo(fullInfo)
-            }
-            // Backward compatibility: includeInfo flag
-            else if arguments.includeInfo == true {
-                let taskInfo = try await TaskManager.shared.getTaskInfo(taskID: arguments.taskID)
-                return .taskInfo(taskInfo)
             }
             // Default: just return the task
             else {
