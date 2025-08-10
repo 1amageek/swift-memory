@@ -28,6 +28,30 @@ struct DependencyManagerTests {
         #expect(blockers.first?.id == blocker.id)
     }
     
+    @Test("Task cannot block itself")
+    func testSelfLoopPrevention() async throws {
+        let context = try await TestContext.create(testName: #function)
+        defer { _Concurrency.Task { await context.cleanup() } }
+        
+        let session = try await context.helpers.createSampleSession()
+        let task = try await context.helpers.createSampleTask(in: session, title: "Task")
+        
+        // Try to make task block itself
+        await context.helpers.expectMemoryError(code: .invalidInput) {
+            try await context.dependencyManager.add(
+                blockerID: task.id,
+                blockedID: task.id
+            )
+        }
+        
+        // Verify no self-dependency was created
+        let blockers = try await context.dependencyManager.getBlockers(taskID: task.id)
+        #expect(blockers.isEmpty)
+        
+        let blocking = try await context.dependencyManager.getBlocking(taskID: task.id)
+        #expect(blocking.isEmpty)
+    }
+    
     @Test("Add dependency chain")
     func testAddDependencyChain() async throws {
         let context = try await TestContext.create(testName: #function)

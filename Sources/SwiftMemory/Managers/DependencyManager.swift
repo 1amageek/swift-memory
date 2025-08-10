@@ -18,48 +18,59 @@ public actor DependencyManager {
     // MARK: - Dependency Operations
     
     public func add(blockerID: UUID, blockedID: UUID) async throws {
-        let context = try await contextProvider.context()
-        
-        // Verify both tasks exist
-        guard let _ = try await context.fetchOne(Task.self, id: blockerID) else {
-            throw MemoryError.taskNotFound(blockerID)
+        // Check for self-loop first (before any database operations)
+        guard blockerID != blockedID else {
+            throw MemoryError.invalidInput(
+                field: "dependency",
+                reason: "Task cannot block itself (self-loop detected)"
+            )
         }
         
-        guard let _ = try await context.fetchOne(Task.self, id: blockedID) else {
-            throw MemoryError.taskNotFound(blockedID)
+        // Execute in a transaction for atomicity
+        try await TransactionManager.executeInTransaction(
+            using: contextProvider
+        ) { context in
+            // Verify both tasks exist
+            guard let _ = try await context.fetchOne(Task.self, id: blockerID) else {
+                throw MemoryError.taskNotFound(blockerID)
+            }
+            
+            guard let _ = try await context.fetchOne(Task.self, id: blockedID) else {
+                throw MemoryError.taskNotFound(blockedID)
+            }
+            
+            // Check for circular dependency - would adding blocker->blocked create a cycle?
+            // We need to check if there's already a path from blocked->blocker
+            let result = try await context.raw(
+                """
+                MATCH p = (blocked:Task {id: $blockedID})-[:Blocks*]->(blocker:Task {id: $blockerID})
+                RETURN COUNT(p) > 0 AS hasCycle
+                """,
+                bindings: ["blockedID": blockedID, "blockerID": blockerID]
+            )
+            
+            var hasCycle = false
+            if result.hasNext(),
+               let tuple = try result.getNext(),
+               let dict = try? tuple.getAsDictionary(),
+               let cycleValue = dict["hasCycle"] as? Bool {
+                hasCycle = cycleValue
+            }
+            
+            if hasCycle {
+                throw MemoryError.circularDependency(blocker: blockerID, blocked: blockedID)
+            }
+            
+            // Create Blocks relationship using MERGE to prevent duplicates
+            _ = try await context.raw(
+                """
+                MATCH (blocker:Task {id: $blockerID}), (blocked:Task {id: $blockedID})
+                MERGE (blocker)-[r:Blocks]->(blocked)
+                RETURN r
+                """,
+                bindings: ["blockerID": blockerID, "blockedID": blockedID]
+            )
         }
-        
-        // Check for circular dependency - would adding blocker->blocked create a cycle?
-        // We need to check if there's already a path from blocked->blocker
-        let result = try await context.raw(
-            """
-            MATCH p = (blocked:Task {id: $blockedID})-[:Blocks*]->(blocker:Task {id: $blockerID})
-            RETURN COUNT(p) > 0 AS hasCycle
-            """,
-            bindings: ["blockedID": blockedID, "blockerID": blockerID]
-        )
-        
-        var hasCycle = false
-        if result.hasNext(),
-           let tuple = try result.getNext(),
-           let dict = try? tuple.getAsDictionary(),
-           let cycleValue = dict["hasCycle"] as? Bool {
-            hasCycle = cycleValue
-        }
-        
-        if hasCycle {
-            throw MemoryError.circularDependency(blocker: blockerID, blocked: blockedID)
-        }
-        
-        // Create Blocks relationship using MERGE to prevent duplicates
-        _ = try await context.raw(
-            """
-            MATCH (blocker:Task {id: $blockerID}), (blocked:Task {id: $blockedID})
-            MERGE (blocker)-[r:Blocks]->(blocked)
-            RETURN r
-            """,
-            bindings: ["blockerID": blockerID, "blockedID": blockedID]
-        )
     }
     
     public func remove(blockerID: UUID, blockedID: UUID) async throws {

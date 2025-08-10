@@ -25,112 +25,111 @@ public actor TaskManager {
         assignee: String? = nil,
         parentTaskID: UUID? = nil
     ) async throws -> Task {
-        let context = try await contextProvider.context()
-        
-        // Validate inputs first
+        // Validate inputs first (before transaction)
         guard (1...5).contains(difficulty) else {
             throw MemoryError.invalidDifficulty(difficulty)
         }
         
-        // Validate session exists
-        guard let _ = try await context.fetchOne(Session.self, id: sessionID) else {
-            throw MemoryError.sessionNotFound(sessionID)
-        }
-        
-        // Validate parent if specified
-        if let parentTaskID = parentTaskID {
-            guard let _ = try await context.fetchOne(Task.self, id: parentTaskID) else {
-                throw MemoryError.taskNotFound(parentTaskID)
+        // Execute the entire creation in a transaction for atomicity
+        return try await TransactionManager.executeInTransaction(
+            using: contextProvider
+        ) { context in
+            // Validate session exists
+            guard let _ = try await context.fetchOne(Session.self, id: sessionID) else {
+                throw MemoryError.sessionNotFound(sessionID)
             }
-        }
-        
-        // Create task object
-        let task = Task(
-            title: title,
-            description: description,
-            assignee: assignee,
-            difficulty: difficulty
-        )
-        
-        // Save task
-        let savedTask = try await context.save(task)
-        
-        // Get next order for HasTask edge
-        let maxOrderResult = try await context.raw(
-            """
-            MATCH (s:Session {id: $sessionID})-[r:HasTask]->(t:Task)
-            RETURN max(r.`order`) as maxOrder
-            """,
-            bindings: ["sessionID": sessionID]
-        )
-        
-        var maxOrder = 0
-        if maxOrderResult.hasNext(),
-           let tuple = try maxOrderResult.getNext(),
-           let dict = try? tuple.getAsDictionary(),
-           let orderValue = dict["maxOrder"] as? Int64 {
-            maxOrder = Int(orderValue)
-        }
-        let nextOrder = maxOrder + 1
-        
-        // Create HasTask relationship using MERGE to ensure (s,t) uniqueness
-        _ = try await context.raw(
-            """
-            MATCH (s:Session {id: $sessionID}), (t:Task {id: $taskID})
-            MERGE (s)-[r:HasTask]->(t)
-            SET r.`order` = $orderValue
-            RETURN r
-            """,
-            bindings: ["sessionID": sessionID, "taskID": savedTask.id, "orderValue": nextOrder]
-        )
-        
-        // Handle parent relationship if specified
-        if let parentTaskID = parentTaskID {
-            // Check for self-loop (task cannot be its own parent)
-            guard parentTaskID != savedTask.id else {
-                // Clean up the created task since we can't establish the parent relationship
-                try await context.delete(savedTask)
-                throw MemoryError.invalidInput(
-                    field: "parentTaskID",
-                    reason: "Task cannot be its own parent (self-loop detected)"
+            
+            // Validate parent if specified
+            if let parentTaskID = parentTaskID {
+                guard let _ = try await context.fetchOne(Task.self, id: parentTaskID) else {
+                    throw MemoryError.taskNotFound(parentTaskID)
+                }
+            }
+            
+            // Create task object
+            let task = Task(
+                title: title,
+                description: description,
+                assignee: assignee,
+                difficulty: difficulty
+            )
+            
+            // Save task
+            let savedTask = try await context.save(task)
+            
+            // Get next order for HasTask edge
+            let maxOrderResult = try await context.raw(
+                """
+                MATCH (s:Session {id: $sessionID})-[r:HasTask]->(t:Task)
+                RETURN max(r.`order`) as maxOrder
+                """,
+                bindings: ["sessionID": sessionID]
+            )
+            
+            var maxOrder = 0
+            if maxOrderResult.hasNext(),
+               let tuple = try maxOrderResult.getNext(),
+               let dict = try? tuple.getAsDictionary(),
+               let orderValue = dict["maxOrder"] as? Int64 {
+                maxOrder = Int(orderValue)
+            }
+            let nextOrder = maxOrder + 1
+            
+            // Create HasTask relationship using MERGE to ensure (s,t) uniqueness
+            _ = try await context.raw(
+                """
+                MATCH (s:Session {id: $sessionID}), (t:Task {id: $taskID})
+                MERGE (s)-[r:HasTask]->(t)
+                SET r.`order` = $orderValue
+                RETURN r
+                """,
+                bindings: ["sessionID": sessionID, "taskID": savedTask.id, "orderValue": nextOrder]
+            )
+            
+            // Handle parent relationship if specified
+            if let parentTaskID = parentTaskID {
+                // Check for self-loop (task cannot be its own parent)
+                guard parentTaskID != savedTask.id else {
+                    throw MemoryError.invalidInput(
+                        field: "parentTaskID",
+                        reason: "Task cannot be its own parent (self-loop detected)"
+                    )
+                }
+                
+                // Check for cycle - would making parentTaskID the parent of this task create a cycle?
+                let cycleResult = try await context.raw(
+                    """
+                    MATCH p = (parent:Task {id: $parentID})-[:SubTaskOf*]->(child:Task {id: $childID})
+                    RETURN COUNT(p) > 0 AS hasCycle
+                    """,
+                    bindings: ["parentID": parentTaskID, "childID": savedTask.id]
+                )
+                
+                var hasCycle = false
+                if cycleResult.hasNext(),
+                   let tuple = try cycleResult.getNext(),
+                   let dict = try? tuple.getAsDictionary(),
+                   let cycleValue = dict["hasCycle"] as? Bool {
+                    hasCycle = cycleValue
+                }
+                
+                if hasCycle {
+                    throw MemoryError.circularDependency(blocker: parentTaskID, blocked: savedTask.id)
+                }
+                
+                // Create parent relationship using MERGE
+                _ = try await context.raw(
+                    """
+                    MATCH (child:Task {id: $childID}), (parent:Task {id: $parentID})
+                    MERGE (child)-[r:SubTaskOf]->(parent)
+                    RETURN r
+                    """,
+                    bindings: ["childID": savedTask.id, "parentID": parentTaskID]
                 )
             }
             
-            // Check for cycle - would making parentTaskID the parent of this task create a cycle?
-            let cycleResult = try await context.raw(
-                """
-                MATCH p = (parent:Task {id: $parentID})-[:SubTaskOf*]->(child:Task {id: $childID})
-                RETURN COUNT(p) > 0 AS hasCycle
-                """,
-                bindings: ["parentID": parentTaskID, "childID": savedTask.id]
-            )
-            
-            var hasCycle = false
-            if cycleResult.hasNext(),
-               let tuple = try cycleResult.getNext(),
-               let dict = try? tuple.getAsDictionary(),
-               let cycleValue = dict["hasCycle"] as? Bool {
-                hasCycle = cycleValue
-            }
-            
-            if hasCycle {
-                // Clean up the created task since we can't establish the parent relationship
-                try await context.delete(savedTask)
-                throw MemoryError.circularDependency(blocker: parentTaskID, blocked: savedTask.id)
-            }
-            
-            // Create parent relationship using MERGE
-            _ = try await context.raw(
-                """
-                MATCH (child:Task {id: $childID}), (parent:Task {id: $parentID})
-                MERGE (child)-[r:SubTaskOf]->(parent)
-                RETURN r
-                """,
-                bindings: ["childID": savedTask.id, "parentID": parentTaskID]
-            )
+            return savedTask
         }
-        
-        return savedTask
     }
     
     public func get(id: UUID) async throws -> Task {
@@ -455,11 +454,11 @@ public actor TaskManager {
         
         if cascade {
             // Cascade delete all subtasks with separate queries
-            // First delete all descendants (subtasks)
+            // First delete all descendants (subtasks) - use 1.. to exclude self
             _ = try await context.raw(
                 """
                 MATCH (t:Task {id: $taskID})
-                OPTIONAL MATCH (descendant:Task)-[:SubTaskOf*]->(t)
+                OPTIONAL MATCH (descendant:Task)-[:SubTaskOf*1..]->(t)
                 WHERE descendant IS NOT NULL
                 DETACH DELETE descendant
                 """,
