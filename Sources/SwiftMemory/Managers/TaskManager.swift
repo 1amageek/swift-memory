@@ -5,7 +5,15 @@ import KuzuSwiftExtension
 public actor TaskManager {
     public static let shared = TaskManager()
     
-    private init() {}
+    private let contextProvider: DatabaseContextProvider
+    
+    public init(contextProvider: DatabaseContextProvider = DefaultDatabaseProvider.shared) {
+        self.contextProvider = contextProvider
+    }
+    
+    private init() {
+        self.contextProvider = DefaultDatabaseProvider.shared
+    }
     
     // MARK: - CRUD Operations
     
@@ -17,7 +25,7 @@ public actor TaskManager {
         assignee: String? = nil,
         parentTaskID: UUID? = nil
     ) async throws -> Task {
-        let context = try await GraphDatabaseSetup.shared.context()
+        let context = try await contextProvider.context()
         
         // Validate inputs first
         guard (1...5).contains(difficulty) else {
@@ -116,7 +124,7 @@ public actor TaskManager {
     }
     
     public func get(id: UUID) async throws -> Task {
-        let context = try await GraphDatabaseSetup.shared.context()
+        let context = try await contextProvider.context()
         guard let task = try await context.fetchOne(Task.self, id: id) else {
             throw MemoryError.taskNotFound(id)
         }
@@ -131,7 +139,7 @@ public actor TaskManager {
         readyOnly: Bool = false,
         difficultyMax: Int? = nil
     ) async throws -> [Task] {
-        let context = try await GraphDatabaseSetup.shared.context()
+        let context = try await contextProvider.context()
         
         if let sessionID = sessionID {
             // Tasks for a specific session
@@ -263,7 +271,7 @@ public actor TaskManager {
         cancelReason: String? = nil,
         parentTaskID: UUID? = nil
     ) async throws -> Task {
-        let context = try await GraphDatabaseSetup.shared.context()
+        let context = try await contextProvider.context()
         
         guard var task = try await context.fetchOne(Task.self, id: id) else {
             throw MemoryError.taskNotFound(id)
@@ -352,7 +360,7 @@ public actor TaskManager {
     }
     
     public func reorder(sessionID: UUID, orderedIds: [UUID]) async throws {
-        let context = try await GraphDatabaseSetup.shared.context()
+        let context = try await contextProvider.context()
         
         // Verify session exists
         guard let _ = try await context.fetchOne(Session.self, id: sessionID) else {
@@ -377,7 +385,7 @@ public actor TaskManager {
     }
     
     public func delete(id: UUID, cascade: Bool = false) async throws {
-        let context = try await GraphDatabaseSetup.shared.context()
+        let context = try await contextProvider.context()
         
         // Verify task exists
         guard let _ = try await context.fetchOne(Task.self, id: id) else {
@@ -413,7 +421,7 @@ public actor TaskManager {
     // MARK: - Task Relationships
     
     public func getParent(taskID: UUID) async throws -> Task? {
-        let context = try await GraphDatabaseSetup.shared.context()
+        let context = try await contextProvider.context()
         
         // Find parent task
         let result = try await context.raw(
@@ -434,7 +442,7 @@ public actor TaskManager {
     }
     
     public func getChildren(taskID: UUID) async throws -> [Task] {
-        let context = try await GraphDatabaseSetup.shared.context()
+        let context = try await contextProvider.context()
         
         // Find child tasks
         let result = try await context.raw(
@@ -540,7 +548,7 @@ public actor TaskManager {
         
         var session: Session? = nil
         if include.session == true {
-            let context = try await GraphDatabaseSetup.shared.context()
+            let context = try await contextProvider.context()
             let result = try await context.raw(
                 """
                 MATCH (s:Session)-[:HasTask]->(t:Task {id: $taskID})

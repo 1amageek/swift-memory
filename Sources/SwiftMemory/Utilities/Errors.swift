@@ -12,6 +12,8 @@ public enum MemoryErrorCode: String, Codable {
     case invalidStatus = "INVALID_STATUS"
     case invalidInput = "INVALID_INPUT"
     case databaseError = "DATABASE_ERROR"
+    case transactionFailed = "TRANSACTION_FAILED"
+    case transactionConflict = "TRANSACTION_CONFLICT"
 }
 
 // MARK: - Memory Error
@@ -25,6 +27,8 @@ public enum MemoryError: LocalizedError {
     case invalidDifficulty(Int)
     case invalidInput(field: String, reason: String)
     case databaseError(String)
+    case transactionFailed(reason: String)
+    case transactionConflict(operation: String)
     
     // MARK: - Error Code
     
@@ -38,6 +42,8 @@ public enum MemoryError: LocalizedError {
         case .invalidDifficulty: return .invalidDifficulty
         case .invalidInput: return .invalidInput
         case .databaseError: return .databaseError
+        case .transactionFailed: return .transactionFailed
+        case .transactionConflict: return .transactionConflict
         }
     }
     
@@ -61,6 +67,10 @@ public enum MemoryError: LocalizedError {
             return "Invalid input for \(field): \(reason)"
         case .databaseError(let message):
             return "Database error: \(message)"
+        case .transactionFailed(let reason):
+            return "Transaction failed: \(reason)"
+        case .transactionConflict(let operation):
+            return "Transaction conflict in \(operation): concurrent modification detected"
         }
     }
     
@@ -84,6 +94,10 @@ public enum MemoryError: LocalizedError {
             return "Check the input format and ensure all required fields are provided correctly"
         case .databaseError:
             return "Check database connection and try again. If the problem persists, restart the service"
+        case .transactionFailed:
+            return "Retry the operation or check for database connectivity issues"
+        case .transactionConflict:
+            return "Retry the operation as another process may have modified the data concurrently"
         }
     }
     
@@ -107,6 +121,10 @@ public enum MemoryError: LocalizedError {
             return ["field": field, "reason": reason]
         case .databaseError(let message):
             return ["details": message]
+        case .transactionFailed(let reason):
+            return ["reason": reason]
+        case .transactionConflict(let operation):
+            return ["operation": operation]
         }
     }
     

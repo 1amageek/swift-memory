@@ -5,12 +5,20 @@ import KuzuSwiftExtension
 public actor DependencyManager {
     public static let shared = DependencyManager()
     
-    private init() {}
+    private let contextProvider: DatabaseContextProvider
+    
+    public init(contextProvider: DatabaseContextProvider = DefaultDatabaseProvider.shared) {
+        self.contextProvider = contextProvider
+    }
+    
+    private init() {
+        self.contextProvider = DefaultDatabaseProvider.shared
+    }
     
     // MARK: - Dependency Operations
     
     public func add(blockerID: UUID, blockedID: UUID) async throws {
-        let context = try await GraphDatabaseSetup.shared.context()
+        let context = try await contextProvider.context()
         
         // Verify both tasks exist
         guard let _ = try await context.fetchOne(Task.self, id: blockerID) else {
@@ -55,7 +63,7 @@ public actor DependencyManager {
     }
     
     public func remove(blockerID: UUID, blockedID: UUID) async throws {
-        let context = try await GraphDatabaseSetup.shared.context()
+        let context = try await contextProvider.context()
         
         // Remove the dependency safely
         _ = try await context.raw(
@@ -72,7 +80,7 @@ public actor DependencyManager {
     // MARK: - Query Operations
     
     public func getBlockers(taskID: UUID) async throws -> [Task] {
-        let context = try await GraphDatabaseSetup.shared.context()
+        let context = try await contextProvider.context()
         
         let result = try await context.raw(
             """
@@ -96,7 +104,7 @@ public actor DependencyManager {
     }
     
     public func getBlocking(taskID: UUID) async throws -> [Task] {
-        let context = try await GraphDatabaseSetup.shared.context()
+        let context = try await contextProvider.context()
         
         let result = try await context.raw(
             """
@@ -120,7 +128,7 @@ public actor DependencyManager {
     }
     
     public func isTaskBlocked(taskID: UUID) async throws -> Bool {
-        let context = try await GraphDatabaseSetup.shared.context()
+        let context = try await contextProvider.context()
         
         // Only consider pending or inProgress tasks as active blockers
         let result = try await context.raw(
@@ -142,7 +150,7 @@ public actor DependencyManager {
     }
     
     public func getDependencyChain(taskID: UUID) async throws -> DependencyChain {
-        let context = try await GraphDatabaseSetup.shared.context()
+        let context = try await contextProvider.context()
         
         // Get all upstream dependencies with DISTINCT and min depth
         let upstreamResult = try await context.raw(

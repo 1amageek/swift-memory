@@ -5,18 +5,26 @@ import KuzuSwiftExtension
 public actor SessionManager {
     public static let shared = SessionManager()
     
-    private init() {}
+    private let contextProvider: DatabaseContextProvider
+    
+    public init(contextProvider: DatabaseContextProvider = DefaultDatabaseProvider.shared) {
+        self.contextProvider = contextProvider
+    }
+    
+    private init() {
+        self.contextProvider = DefaultDatabaseProvider.shared
+    }
     
     // MARK: - CRUD Operations
     
     public func create(title: String) async throws -> Session {
-        let context = try await GraphDatabaseSetup.shared.context()
+        let context = try await contextProvider.context()
         let session = Session(title: title)
         return try await context.save(session)
     }
     
     public func get(id: UUID) async throws -> Session {
-        let context = try await GraphDatabaseSetup.shared.context()
+        let context = try await contextProvider.context()
         guard let session = try await context.fetchOne(Session.self, id: id) else {
             throw MemoryError.sessionNotFound(id)
         }
@@ -27,30 +35,14 @@ public actor SessionManager {
         startedAfter: Date? = nil,
         startedBefore: Date? = nil
     ) async throws -> [Session] {
-        let context = try await GraphDatabaseSetup.shared.context()
+        let context = try await contextProvider.context()
         
-        // Build query based on date filters
-        var query = "MATCH (s:Session)"
-        var whereConditions: [String] = []
-        var bindings: [String: any Sendable] = [:]
+        // Use QueryBuilder for cleaner query construction
+        let (query, bindings) = CypherQueryBuilder.SessionQueries.list(
+            startedAfter: startedAfter,
+            startedBefore: startedBefore
+        )
         
-        if let after = startedAfter {
-            whereConditions.append("s.startedAt >= $startedAfter")
-            bindings["startedAfter"] = after
-        }
-        
-        if let before = startedBefore {
-            whereConditions.append("s.startedAt <= $startedBefore")
-            bindings["startedBefore"] = before
-        }
-        
-        if !whereConditions.isEmpty {
-            query += " WHERE " + whereConditions.joined(separator: " AND ")
-        }
-        
-        query += " RETURN s ORDER BY s.startedAt DESC"
-        
-        // Always use ordered query for consistency
         let result = try await context.raw(query, bindings: bindings)
         var sessions: [Session] = []
         while result.hasNext() {
@@ -65,7 +57,7 @@ public actor SessionManager {
     }
     
     public func update(id: UUID, title: String) async throws -> Session {
-        let context = try await GraphDatabaseSetup.shared.context()
+        let context = try await contextProvider.context()
         
         guard var session = try await context.fetchOne(Session.self, id: id) else {
             throw MemoryError.sessionNotFound(id)
@@ -76,7 +68,7 @@ public actor SessionManager {
     }
     
     public func delete(id: UUID, cascade: Bool = false) async throws {
-        let context = try await GraphDatabaseSetup.shared.context()
+        let context = try await contextProvider.context()
         
         // Verify session exists
         guard let session = try await context.fetchOne(Session.self, id: id) else {
@@ -107,7 +99,7 @@ public actor SessionManager {
     // MARK: - Session Task Management
     
     public func getTaskCount(sessionID: UUID) async throws -> Int {
-        let context = try await GraphDatabaseSetup.shared.context()
+        let context = try await contextProvider.context()
         
         // Count tasks for session
         let result = try await context.raw(
@@ -128,7 +120,7 @@ public actor SessionManager {
     }
     
     public func getTasks(sessionID: UUID) async throws -> [(task: Task, order: Int)] {
-        let context = try await GraphDatabaseSetup.shared.context()
+        let context = try await contextProvider.context()
         
         // Get tasks with their order
         let result = try await context.raw(

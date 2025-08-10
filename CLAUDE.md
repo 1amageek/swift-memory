@@ -2,9 +2,29 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project Overview
+## Design Philosophy
 
-swift-memory is a KuzuDB-based task management system designed to be used as Tools by OpenFoundationModels agents. It provides hierarchical task management with dependencies, session tracking, difficulty-based assignment, and ordering capabilities.
+swift-memory is designed as an LLM tool library with four core principles:
+
+### 1. LLM Tool-First Design
+- **Purpose**: Enable LLM agents to manage hierarchical TODO lists with clear dependencies
+- **Simplicity**: Each tool performs one clear operation (create, get, list, update, delete, reorder)
+- **Namespace Safety**: All tools prefixed with `memory.` to prevent naming conflicts with other agent tools
+
+### 2. Concurrent Multi-Agent Safety
+- **Thread-Safe Operations**: All managers use Swift actors for safe concurrent access
+- **Session Isolation**: Multiple LLM agents can work in separate sessions simultaneously
+- **Dependency Integrity**: DAG constraints prevent circular dependencies across all agents
+
+### 3. Radical Simplicity
+- **Clear Mental Model**: Sessions contain ordered tasks, tasks can depend on other tasks
+- **Minimal Concepts**: Only 3 node types (Session, Task) and 3 relationship types (HasTask, SubTaskOf, Blocks)
+- **Intuitive Status**: Tasks are `pending`, `inProgress`, `done`, or `cancelled`
+
+### 4. Dependency Transparency
+- **Ready Tasks**: Automatically filter tasks with no incomplete dependencies
+- **Blocking Relationships**: Clear visibility of what prevents task execution
+- **Hierarchical Structure**: Parent-child relationships for task breakdown
 
 ## Naming Conventions
 
@@ -46,142 +66,50 @@ swift build --clean
 
 ## Architecture
 
-### Core Components
+### Data Model
+- **Session**: Work context with title and timestamp
+- **Task**: Individual task with status, difficulty, assignee, and optional description
+- **HasTask**: Session contains ordered tasks
+- **SubTaskOf**: Parent-child task relationships (single parent only)
+- **Blocks**: Dependency relationships maintaining DAG (no cycles)
 
-1. **Graph Database Models** (KuzuDB)
-   - **Nodes**:
-     - `Session`: Work context with title and timestamp
-     - `Task`: Individual task with status, difficulty, assignee, and cancellation tracking
-   - **Edges**:
-     - `HasTask`: Session → Task with `order` property for task ordering
-     - `SubTaskOf`: Child → Parent task relationship (single parent only)
-     - `Blocks`: Dependency relationship (blocker → blocked) maintaining DAG
+### Tool Suite
+All tools follow `memory.[domain].[verb]` naming:
+- **Session**: create, get, list, update, delete
+- **Task**: create, get, list, update, reorder, delete
+- **Dependency**: add, remove
 
-2. **Tool Suite** (OpenFoundationModels.Tool)
-   Named with `memory.[domain].[verb]` convention to avoid conflicts:
-   - **Session Tools**: `memory.session.create`, `.get`, `.list`, `.update`, `.delete`
-   - **Task Tools**: `memory.task.create`, `.get`, `.list`, `.update`, `.reorder`, `.delete`
-   - **Dependency Tools**: `memory.dependency.add`, `.remove`
+### Key Constraints
+- Tasks ordered within sessions via `HasTask.order`
+- Dependency graph must remain acyclic
+- Difficulty scale: 1-5 (1=easy, 5=hard, default=3)
+- Single assignee per task (string)
 
-3. **Query Patterns**
-   - DAG validation for circular dependency prevention
-   - "Ready tasks" filtering (tasks with no incomplete dependencies)
-   - Order maintenance within sessions
-   - Difficulty-based task matching
+## LLM Agent Usage Patterns
 
-### Key Design Decisions
+### Basic Workflow
+1. Create session for work context
+2. Add tasks with descriptions and difficulty levels
+3. Set dependencies between tasks
+4. Query ready tasks (no incomplete dependencies)
+5. Update task status as work progresses
 
-- **Namespace Convention**: All tools prefixed with `memory.` to prevent naming collisions
-- **Single Assignee**: Tasks have one assignee (string) for simplicity
-- **Order Management**: Tasks ordered within sessions via `HasTask.order`
-- **Dependency as DAG**: `Blocks` edges maintain acyclic dependency graph
-- **Difficulty Scale**: 1-5 integer scale (1=easy, 5=hard, default=3)
+### Multi-Agent Considerations
+- Each LLM agent should work in separate sessions
+- Use difficulty filtering to match tasks to agent capabilities
+- Ready task queries automatically handle dependency management
+- Session isolation prevents agents from interfering with each other
 
-### Database Schema
-
+### Example Usage
 ```swift
-// Nodes
-@GraphNode Session { id, title, startedAt }
-@GraphNode Task { id, title, description?, status, cancelReason?, assignee?, difficulty, createdAt, updatedAt }
+// Create work session
+memory.session.create { title: "API Development" }
 
-// Edges
-@GraphEdge(from: Session, to: Task) HasTask { order }
-@GraphEdge(from: Task, to: Task) SubTaskOf { }
-@GraphEdge(from: Task, to: Task) Blocks { }
-
-// Constraints
-- HasTask: (sessionID, order) must be unique
-- SubTaskOf: Each task can have at most one parent
-- Blocks: Must maintain DAG (no cycles)
-```
-
-### KuzuSwift Protocol Definitions
-
-The models conform to the following protocols from KuzuSwift:
-
-```swift
-// MARK: - GraphNodeModel Protocol for node operations
-public protocol GraphNodeModel: _KuzuGraphModel, Codable {
-    static var modelName: String { get }
-}
-
-public extension GraphNodeModel {
-    static var modelName: String {
-        String(describing: Self.self)
-    }
-}
-
-// MARK: - GraphEdgeModel Protocol for edge operations
-public protocol GraphEdgeModel: _KuzuGraphModel, Codable {
-    static var edgeName: String { get }
-}
-
-public extension GraphEdgeModel {
-    static var edgeName: String {
-        String(describing: Self.self)
-    }
-}
-```
-
-These protocols provide the foundation for graph database operations in KuzuDB. The `@GraphNode` and `@GraphEdge` macros automatically generate conformance to these protocols.
-
-## Key Queries
-
-```cypher
-// Check for circular dependencies
-MATCH p = (blocked:Task {id:$blockedID})<-[:Blocks*]-(blocker:Task {id:$blockerID})
-RETURN COUNT(p) > 0 AS hasCycle
-
-// Find ready tasks (no incomplete blockers)
-MATCH (s:Session {id:$sessionID})-[r:HasTask]->(t:Task)
-WHERE t.status IN ['pending','inProgress']
-  AND NOT EXISTS {
-    MATCH (blocker)-[:Blocks]->(t)
-    WHERE blocker.status <> 'done'
-  }
-RETURN t ORDER BY r.order
-```
-
-## Usage Example
-
-```swift
-// Create session
-memory.session.create { title: "Sprint Planning" }
-
-// Add tasks with dependencies
+// Add tasks with dependencies  
 memory.task.create { sessionID: "S1", title: "Design API", difficulty: 4 }
 memory.task.create { sessionID: "S1", title: "Implement API", difficulty: 3 }
 memory.dependency.add { blockerID: "T1", blockedID: "T2" }
 
-// Find tasks ready for assignment
+// Find ready tasks for difficulty level 3 or below
 memory.task.list { sessionID: "S1", readyOnly: true, difficultyMax: 3 }
-
-// Reorder tasks
-memory.task.reorder { sessionID: "S1", orderedIDs: ["T2", "T1"] }
 ```
-
-## Testing Strategy
-
-- **Unit Tests**: Each tool tested independently with mock data
-- **Integration Tests**: Full workflow scenarios including dependencies
-- **Edge Cases**: Circular dependency detection, order conflicts, cascade deletes
-- **Performance**: Bulk operations and complex graph queries
-
-## Future Extensions
-
-- **Status History**: Add `StatusChanged` edges for audit trail
-- **Agent Management**: Upgrade assignee from string to `Agent` nodes
-- **Time Tracking**: Add `startedAt`/`completedAt` timestamps
-- **Priority/Due Dates**: Additional task properties as needed
-
-## Important Patterns
-
-- Session creation must precede task creation
-- Dependency cycles are prevented at creation time
-- Task ordering is session-scoped
-- Ready task queries automatically filter by dependency status
-- Difficulty matching enables skill-based assignment algorithms
-
-## Known Issues
-
-- **kuzu-swift-extension deepwiki**: The deepwiki documentation for kuzu-swift-extension is not available as the API is outdated and cannot be used.
