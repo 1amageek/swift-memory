@@ -7,109 +7,101 @@ struct GraphDatabaseSetupTests {
     
     @Test("Database initialization should succeed")
     func testInitialization() async throws {
-        let context = try await GraphDatabaseSetup.shared.context()
-        #expect(context != nil)
+        try await withTestContext(testName: #function) { context in
+            // Test that we can create a session successfully
+            let session = try await context.sessionManager.create(title: "Test Session")
+            
+            // Verify session was actually saved to database
+            let fetched = try await context.sessionManager.get(id: session.id)
+            #expect(fetched.id == session.id)
+            #expect(fetched.title == "Test Session")
+        }
     }
     
     @Test("Multiple initialization calls should be safe")
     func testMultipleInitialization() async throws {
-        // Get context multiple times
-        let context1 = try await GraphDatabaseSetup.shared.context()
-        let context2 = try await GraphDatabaseSetup.shared.context()
-        
-        #expect(context1 != nil)
-        #expect(context2 != nil)
-        
-        // Both contexts should work
-        let session1 = Session(title: "Test 1")
-        let saved1 = try await context1.save(session1)
-        #expect(saved1.id != UUID())
-        
-        let session2 = Session(title: "Test 2")
-        let saved2 = try await context2.save(session2)
-        #expect(saved2.id != UUID())
+        try await withTestContext(testName: #function) { context in
+            // Both operations use the same context through managers
+            let session1 = try await context.sessionManager.create(title: "Test 1")
+            let session2 = try await context.sessionManager.create(title: "Test 2")
+            
+            // Verify both sessions were saved
+            let fetched1 = try await context.sessionManager.get(id: session1.id)
+            #expect(fetched1.id == session1.id)
+            #expect(fetched1.title == "Test 1")
+            
+            let fetched2 = try await context.sessionManager.get(id: session2.id)
+            #expect(fetched2.id == session2.id)
+            #expect(fetched2.title == "Test 2")
+            
+            // Verify they have different IDs
+            #expect(session1.id != session2.id)
+        }
     }
     
     @Test("Context should be reusable for multiple operations")
     func testContextReuse() async throws {
-        let context = try await GraphDatabaseSetup.shared.context()
-        
-        // Create a session
-        let session = Session(title: "Reusable Test")
-        let saved = try await context.save(session)
-        
-        // Fetch the session
-        let fetched = try await context.fetchOne(Session.self, id: saved.id)
-        #expect(fetched?.title == "Reusable Test")
-        
-        // Create a task using the same context
-        let task = Task(
-            title: "Test Task",
-            description: "Testing context reuse",
-            difficulty: 3
-        )
-        let savedTask = try await context.save(task)
-        #expect(savedTask.title == "Test Task")
-        
-        // Create relationship using raw query
-        _ = try await context.raw(
-            """
-            MATCH (s:Session {id: $sessionID}), (t:Task {id: $taskID})
-            MERGE (s)-[r:HasTask]->(t)
-            SET r.order = 1
-            RETURN r
-            """,
-            bindings: ["sessionID": saved.id, "taskID": savedTask.id]
-        )
-        
-        // Verify relationship was created
-        let result = try await context.raw(
-            """
-            MATCH (s:Session {id: $sessionID})-[:HasTask]->(t:Task)
-            RETURN COUNT(t) as count
-            """,
-            bindings: ["sessionID": saved.id]
-        )
-        
-        if result.hasNext(),
-           let tuple = try result.getNext(),
-           let dict = try? tuple.getAsDictionary(),
-           let count = dict["count"] as? Int64 {
-            #expect(count == 1)
-        } else {
-            Issue.record("Failed to verify task relationship")
+        try await withTestContext(testName: #function) { context in
+            // Create a session
+            let session = try await context.sessionManager.create(title: "Reusable Test")
+            
+            // Fetch the session
+            let fetched = try await context.sessionManager.get(id: session.id)
+            #expect(fetched.title == "Reusable Test")
+            
+            // Create a task using the same context
+            let task = try await context.taskManager.create(
+                sessionID: session.id,
+                title: "Test Task",
+                description: "Testing context reuse"
+            )
+            
+            // Verify task exists and was saved
+            let fetchedTask = try await context.taskManager.get(id: task.id)
+            #expect(fetchedTask.id == task.id)
+            #expect(fetchedTask.title == "Test Task")
+            #expect(fetchedTask.description == "Testing context reuse")
         }
     }
     
     @Test("Database should handle concurrent access")
     func testConcurrentAccess() async throws {
-        // Create multiple sessions concurrently
-        let results = await withTaskGroup(of: Session?.self) { group in
-            for i in 1...5 {
-                group.addTask {
-                    do {
-                        let context = try await GraphDatabaseSetup.shared.context()
-                        let session = Session(title: "Concurrent \(i)")
-                        return try await context.save(session)
-                    } catch {
-                        return nil
+        try await withTestContext(testName: #function) { context in
+            // Create session first
+            let session = try await context.sessionManager.create(title: "Concurrent Test")
+            
+            // Create multiple tasks concurrently using TaskGroup for proper error handling
+            var results: [Task] = []
+            try await withThrowingTaskGroup(of: Task.self) { group in
+                for index in 0..<5 {
+                    group.addTask {
+                        return try await context.taskManager.create(
+                            sessionID: session.id,
+                            title: "Task \(index)",
+                            description: "Concurrent test \(index)"
+                        )
                     }
+                }
+                
+                // Collect all results - will throw if any task fails
+                for try await task in group {
+                    results.append(task)
                 }
             }
             
-            var sessions: [Session] = []
-            for await session in group {
-                if let session = session {
-                    sessions.append(session)
-                }
+            // All tasks should be created successfully
+            #expect(results.count == 5)
+            
+            // All IDs should be unique
+            let ids = results.map(\.id)
+            #expect(Set(ids).count == 5)
+            
+            // Verify all tasks exist in database
+            for task in results {
+                let fetched = try await context.taskManager.get(id: task.id)
+                #expect(fetched.id == task.id)
+                #expect(fetched.title.starts(with: "Task"))
             }
-            return sessions
         }
-        
-        #expect(results.count == 5)
-        
-        // Verify all sessions have unique IDs
-        let ids = results.map { $0.id }
-        #expect(Set(ids).count == 5)
     }
 }

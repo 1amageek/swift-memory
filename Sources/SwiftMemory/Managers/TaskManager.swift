@@ -59,7 +59,7 @@ public actor TaskManager {
         let maxOrderResult = try await context.raw(
             """
             MATCH (s:Session {id: $sessionID})-[r:HasTask]->(t:Task)
-            RETURN MAX(r.order) as maxOrder
+            RETURN max(r.`order`) as maxOrder
             """,
             bindings: ["sessionID": sessionID]
         )
@@ -78,14 +78,24 @@ public actor TaskManager {
             """
             MATCH (s:Session {id: $sessionID}), (t:Task {id: $taskID})
             MERGE (s)-[r:HasTask]->(t)
-            SET r.order = $order
+            SET r.`order` = $orderValue
             RETURN r
             """,
-            bindings: ["sessionID": sessionID, "taskID": savedTask.id, "order": nextOrder]
+            bindings: ["sessionID": sessionID, "taskID": savedTask.id, "orderValue": nextOrder]
         )
         
         // Handle parent relationship if specified
         if let parentTaskID = parentTaskID {
+            // Check for self-loop (task cannot be its own parent)
+            guard parentTaskID != savedTask.id else {
+                // Clean up the created task since we can't establish the parent relationship
+                try await context.delete(savedTask)
+                throw MemoryError.invalidInput(
+                    field: "parentTaskID",
+                    reason: "Task cannot be its own parent (self-loop detected)"
+                )
+            }
+            
             // Check for cycle - would making parentTaskID the parent of this task create a cycle?
             let cycleResult = try await context.raw(
                 """
@@ -174,15 +184,16 @@ public actor TaskManager {
                 query += " WHERE " + whereConditions.joined(separator: " AND ")
             }
             
-            query += " RETURN t ORDER BY r.order ASC"
+            query += " RETURN t ORDER BY r.`order` ASC"
             
             let result = try await context.raw(query, bindings: bindings)
             var tasks: [Task] = []
             while result.hasNext() {
                 if let tuple = try result.getNext(),
                    let dict = try? tuple.getAsDictionary(),
-                   let taskDict = dict["t"] as? [String: Any?] {
-                    let task = try KuzuDecoder().decode(Task.self, from: taskDict)
+                   let taskNode = dict["t"],
+                   let properties = KuzuNodeExtractor.extractNodeOrDictionary(from: taskNode) {
+                    let task = try KuzuDecoder().decode(Task.self, from: properties)
                     tasks.append(task)
                 }
             }
@@ -202,8 +213,9 @@ public actor TaskManager {
             while result.hasNext() {
                 if let tuple = try result.getNext(),
                    let dict = try? tuple.getAsDictionary(),
-                   let taskDict = dict["t"] as? [String: Any?] {
-                    let task = try KuzuDecoder().decode(Task.self, from: taskDict)
+                   let taskNode = dict["t"],
+                   let properties = KuzuNodeExtractor.extractNodeOrDictionary(from: taskNode) {
+                    let task = try KuzuDecoder().decode(Task.self, from: properties)
                     tasks.append(task)
                 }
             }
@@ -251,8 +263,9 @@ public actor TaskManager {
                 while result.hasNext() {
                     if let tuple = try result.getNext(),
                        let dict = try? tuple.getAsDictionary(),
-                       let taskDict = dict["t"] as? [String: Any?] {
-                        let task = try KuzuDecoder().decode(Task.self, from: taskDict)
+                       let taskNode = dict["t"],
+                       let properties = KuzuNodeExtractor.extractNodeOrDictionary(from: taskNode) {
+                        let task = try KuzuDecoder().decode(Task.self, from: properties)
                         tasks.append(task)
                     }
                 }
@@ -308,6 +321,14 @@ public actor TaskManager {
         
         // Update parent relationship if specified
         if let parentTaskID = parentTaskID {
+            // Check for self-loop (task cannot be its own parent)
+            guard parentTaskID != id else {
+                throw MemoryError.invalidInput(
+                    field: "parentTaskID",
+                    reason: "Task cannot be its own parent (self-loop detected)"
+                )
+            }
+            
             // Verify new parent exists
             guard let _ = try await context.fetchOne(Task.self, id: parentTaskID) else {
                 throw MemoryError.taskNotFound(parentTaskID)
@@ -367,9 +388,49 @@ public actor TaskManager {
             throw MemoryError.sessionNotFound(sessionID)
         }
         
+        // Batch validate all tasks exist in the session
+        let validationResult = try await context.raw(
+            """
+            UNWIND $taskIDs AS taskID
+            MATCH (s:Session {id: $sessionID})-[:HasTask]->(t:Task {id: taskID})
+            RETURN collect(t.id) as validIDs
+            """,
+            bindings: ["sessionID": sessionID, "taskIDs": orderedIds]
+        )
+        
+        var validIDs: Set<UUID> = []
+        if validationResult.hasNext(),
+           let tuple = try validationResult.getNext(),
+           let dict = try? tuple.getAsDictionary(),
+           let idArray = dict["validIDs"] as? [Any] {
+            for id in idArray {
+                if let uuidString = id as? String,
+                   let uuid = UUID(uuidString: uuidString) {
+                    validIDs.insert(uuid)
+                } else if let uuid = id as? UUID {
+                    validIDs.insert(uuid)
+                }
+            }
+        }
+        
+        // Check for missing tasks
+        let requestedIDs = Set(orderedIds)
+        let missingIDs = requestedIDs.subtracting(validIDs)
+        if !missingIDs.isEmpty {
+            throw MemoryError.taskNotFound(missingIDs.first!)
+        }
+        
+        // Check for duplicate IDs in the input
+        if orderedIds.count != requestedIDs.count {
+            throw MemoryError.invalidInput(
+                field: "orderedIds",
+                reason: "Duplicate task IDs provided"
+            )
+        }
+        
         // Prepare pairs for batch update
         let pairs: [[String: any Sendable]] = orderedIds.enumerated().map { index, taskID in
-            ["id": taskID, "order": index + 1]
+            ["id": taskID, "orderValue": index + 1]
         }
         
         // Update all orders in a single query using UNWIND
@@ -377,7 +438,7 @@ public actor TaskManager {
             """
             UNWIND $pairs AS pair
             MATCH (s:Session {id: $sessionID})-[r:HasTask]->(t:Task {id: pair.id})
-            SET r.order = pair.order
+            SET r.`order` = pair.orderValue
             RETURN COUNT(*) as updated
             """,
             bindings: ["sessionID": sessionID, "pairs": pairs]
@@ -393,15 +454,23 @@ public actor TaskManager {
         }
         
         if cascade {
-            // Cascade delete all subtasks safely
+            // Cascade delete all subtasks with separate queries
+            // First delete all descendants (subtasks)
             _ = try await context.raw(
                 """
                 MATCH (t:Task {id: $taskID})
-                OPTIONAL MATCH path = (descendant:Task)-[:SubTaskOf*]->(t)
-                WITH t, COLLECT(DISTINCT descendant) AS descendants
-                FOREACH (d IN descendants | DETACH DELETE d)
+                OPTIONAL MATCH (descendant:Task)-[:SubTaskOf*]->(t)
+                WHERE descendant IS NOT NULL
+                DETACH DELETE descendant
+                """,
+                bindings: ["taskID": id]
+            )
+            
+            // Then delete the task itself
+            _ = try await context.raw(
+                """
+                MATCH (t:Task {id: $taskID})
                 DETACH DELETE t
-                RETURN 1 as deleted
                 """,
                 bindings: ["taskID": id]
             )
@@ -435,8 +504,9 @@ public actor TaskManager {
         if result.hasNext(),
            let tuple = try result.getNext(),
            let dict = try? tuple.getAsDictionary(),
-           let parentDict = dict["parent"] as? [String: Any?] {
-            return try KuzuDecoder().decode(Task.self, from: parentDict)
+           let parentNode = dict["parent"],
+           let properties = KuzuNodeExtractor.extractNodeOrDictionary(from: parentNode) {
+            return try KuzuDecoder().decode(Task.self, from: properties)
         }
         return nil
     }
@@ -458,8 +528,9 @@ public actor TaskManager {
         while result.hasNext() {
             if let tuple = try result.getNext(),
                let dict = try? tuple.getAsDictionary(),
-               let childDict = dict["child"] as? [String: Any?] {
-                let child = try KuzuDecoder().decode(Task.self, from: childDict)
+               let childNode = dict["child"],
+               let properties = KuzuNodeExtractor.extractNodeOrDictionary(from: childNode) {
+                let child = try KuzuDecoder().decode(Task.self, from: properties)
                 children.append(child)
             }
         }
@@ -560,8 +631,9 @@ public actor TaskManager {
             if result.hasNext(),
                let tuple = try result.getNext(),
                let dict = try? tuple.getAsDictionary(),
-               let sessionDict = dict["s"] as? [String: Any?] {
-                session = try KuzuDecoder().decode(Session.self, from: sessionDict)
+               let sessionNode = dict["s"],
+               let properties = KuzuNodeExtractor.extractNodeOrDictionary(from: sessionNode) {
+                session = try KuzuDecoder().decode(Session.self, from: properties)
             }
         }
         

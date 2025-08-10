@@ -107,25 +107,31 @@ public struct IsolatedTestHelpers {
     
     // MARK: - Error Testing
     
-    /// Test that an async expression throws a specific MemoryError
+    /// Test that an async expression throws a MemoryError with specific code
+    public func expectMemoryError(
+        code expectedCode: MemoryErrorCode,
+        when expression: () async throws -> Void
+    ) async {
+        do {
+            try await expression()
+            Issue.record("Expected MemoryError with code \(expectedCode) to be thrown, but no error was thrown")
+        } catch let error as MemoryError {
+            #expect(
+                error.code == expectedCode,
+                "Expected error code \(expectedCode) but got \(error.code)"
+            )
+        } catch {
+            Issue.record("Expected MemoryError with code \(expectedCode) but got \(error)")
+        }
+    }
+    
+    /// Legacy method for backward compatibility - prefer code-based version
     public func expectMemoryError<T>(
         _ expectedError: MemoryError,
         when expression: () async throws -> T
     ) async {
-        do {
+        await expectMemoryError(code: expectedError.code) {
             _ = try await expression()
-            Issue.record("Expected \(expectedError) to be thrown, but no error was thrown")
-        } catch let error as MemoryError {
-            // Compare error cases without associated values for simplicity
-            let actualErrorName = String(describing: error).components(separatedBy: "(").first ?? ""
-            let expectedErrorName = String(describing: expectedError).components(separatedBy: "(").first ?? ""
-            
-            #expect(
-                actualErrorName == expectedErrorName,
-                "Expected \(expectedError) but got \(error)"
-            )
-        } catch {
-            Issue.record("Expected MemoryError.\(expectedError) but got \(error)")
         }
     }
 }

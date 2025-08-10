@@ -82,6 +82,7 @@ public actor DependencyManager {
     public func getBlockers(taskID: UUID) async throws -> [Task] {
         let context = try await contextProvider.context()
         
+        
         let result = try await context.raw(
             """
             MATCH (blocker:Task)-[:Blocks]->(blocked:Task {id: $taskID})
@@ -95,8 +96,9 @@ public actor DependencyManager {
         while result.hasNext() {
             if let tuple = try result.getNext(),
                let dict = try? tuple.getAsDictionary(),
-               let blockerDict = dict["blocker"] as? [String: Any?] {
-                let blocker = try KuzuDecoder().decode(Task.self, from: blockerDict)
+               let blockerNode = dict["blocker"],
+               let properties = KuzuNodeExtractor.extractNodeOrDictionary(from: blockerNode) {
+                let blocker = try KuzuDecoder().decode(Task.self, from: properties)
                 blockers.append(blocker)
             }
         }
@@ -119,8 +121,9 @@ public actor DependencyManager {
         while result.hasNext() {
             if let tuple = try result.getNext(),
                let dict = try? tuple.getAsDictionary(),
-               let blockedDict = dict["blocked"] as? [String: Any?] {
-                let task = try KuzuDecoder().decode(Task.self, from: blockedDict)
+               let blockedNode = dict["blocked"],
+               let properties = KuzuNodeExtractor.extractNodeOrDictionary(from: blockedNode) {
+                let task = try KuzuDecoder().decode(Task.self, from: properties)
                 blocked.append(task)
             }
         }
@@ -169,9 +172,10 @@ public actor DependencyManager {
         while upstreamResult.hasNext() {
             if let tuple = try upstreamResult.getNext(),
                let dict = try? tuple.getAsDictionary(),
-               let blockerDict = dict["blocker"] as? [String: Any?],
-               let task = try? decoder.decode(Task.self, from: blockerDict),
-               let depth = dict["depth"] as? Int64 {
+               let blockerNode = dict["blocker"],
+               let depth = dict["depth"] as? Int64,
+               let properties = KuzuNodeExtractor.extractNodeOrDictionary(from: blockerNode) {
+                let task = try decoder.decode(Task.self, from: properties)
                 upstreamData.append(TaskWithDepth(task: task, depth: Int(depth)))
             }
         }
@@ -192,9 +196,10 @@ public actor DependencyManager {
         while downstreamResult.hasNext() {
             if let tuple = try downstreamResult.getNext(),
                let dict = try? tuple.getAsDictionary(),
-               let blockedDict = dict["blocked"] as? [String: Any?],
-               let task = try? decoder.decode(Task.self, from: blockedDict),
-               let depth = dict["depth"] as? Int64 {
+               let blockedNode = dict["blocked"],
+               let depth = dict["depth"] as? Int64,
+               let properties = KuzuNodeExtractor.extractNodeOrDictionary(from: blockedNode) {
+                let task = try decoder.decode(Task.self, from: properties)
                 downstreamData.append(TaskWithDepth(task: task, depth: Int(depth)))
             }
         }

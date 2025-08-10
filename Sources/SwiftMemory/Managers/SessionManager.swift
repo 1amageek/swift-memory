@@ -48,8 +48,9 @@ public actor SessionManager {
         while result.hasNext() {
             if let tuple = try result.getNext(),
                let dict = try? tuple.getAsDictionary(),
-               let sessionDict = dict["s"] as? [String: Any?] {
-                let session = try KuzuDecoder().decode(Session.self, from: sessionDict)
+               let sessionNode = dict["s"],
+               let properties = KuzuNodeExtractor.extractNodeOrDictionary(from: sessionNode) {
+                let session = try KuzuDecoder().decode(Session.self, from: properties)
                 sessions.append(session)
             }
         }
@@ -76,17 +77,32 @@ public actor SessionManager {
         }
         
         if cascade {
-            // Cascade delete with proper pattern and safety
+            // Cascade delete with separate queries for safety
+            // First delete all descendants (subtasks)
+            _ = try await context.raw(
+                """
+                MATCH (s:Session {id: $sessionID})-[:HasTask]->(t:Task)
+                OPTIONAL MATCH (descendant:Task)-[:SubTaskOf*]->(t)
+                WHERE descendant IS NOT NULL
+                DETACH DELETE descendant
+                """,
+                bindings: ["sessionID": id]
+            )
+            
+            // Then delete all direct tasks
+            _ = try await context.raw(
+                """
+                MATCH (s:Session {id: $sessionID})-[:HasTask]->(t:Task)
+                DETACH DELETE t
+                """,
+                bindings: ["sessionID": id]
+            )
+            
+            // Finally delete the session
             _ = try await context.raw(
                 """
                 MATCH (s:Session {id: $sessionID})
-                OPTIONAL MATCH (s)-[:HasTask]->(t:Task)
-                OPTIONAL MATCH (descendant:Task)-[:SubTaskOf*]->(t)
-                WITH s, COLLECT(DISTINCT t) AS tasks, COLLECT(DISTINCT descendant) AS descendants
-                FOREACH (d IN descendants | DETACH DELETE d)
-                FOREACH (task IN tasks | DETACH DELETE task)
                 DETACH DELETE s
-                RETURN 1 as deleted
                 """,
                 bindings: ["sessionID": id]
             )
@@ -126,8 +142,8 @@ public actor SessionManager {
         let result = try await context.raw(
             """
             MATCH (s:Session {id: $sessionID})-[r:HasTask]->(t:Task)
-            RETURN t, r.order as taskOrder
-            ORDER BY r.order ASC
+            RETURN t, r.`order` as taskOrder
+            ORDER BY r.`order` ASC
             """,
             bindings: ["sessionID": sessionID]
         )
@@ -136,9 +152,10 @@ public actor SessionManager {
         while result.hasNext() {
             if let tuple = try result.getNext(),
                let dict = try? tuple.getAsDictionary(),
-               let taskDict = dict["t"] as? [String: Any?],
+               let taskNode = dict["t"],
+               let properties = KuzuNodeExtractor.extractNodeOrDictionary(from: taskNode),
                let order = dict["taskOrder"] as? Int64 {
-                let task = try KuzuDecoder().decode(Task.self, from: taskDict)
+                let task = try KuzuDecoder().decode(Task.self, from: properties)
                 taskOrderPairs.append((task: task, order: Int(order)))
             }
         }

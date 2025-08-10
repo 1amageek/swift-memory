@@ -9,14 +9,21 @@ struct SessionManagerTests {
     
     @Test("Create session with valid title")
     func testCreateSession() async throws {
-        let context = try await TestContext.create(testName: #function)
-        defer { _Concurrency.Task { await context.cleanup() } }
-        
-        let session = try await context.sessionManager.create(title: "Sprint Planning")
-        
-        #expect(session.title == "Sprint Planning")
-        #expect(session.id != UUID())
-        #expect(session.startedAt.timeIntervalSinceNow < 1) // Recently created
+        try await withTestContext(testName: #function) { context in
+            let before = Date().addingTimeInterval(-1) // Allow 1 second tolerance
+            let session = try await context.sessionManager.create(title: "Sprint Planning")
+            let after = Date().addingTimeInterval(1) // Allow 1 second tolerance
+            
+            #expect(session.title == "Sprint Planning")
+            
+            // Verify session was saved to database
+            let fetched = try await context.sessionManager.get(id: session.id)
+            #expect(fetched.id == session.id)
+            
+            // Verify timestamp is within reasonable range
+            #expect(session.startedAt >= before)
+            #expect(session.startedAt <= after)
+        }
     }
     
     @Test("Create multiple sessions")
@@ -39,12 +46,15 @@ struct SessionManagerTests {
     
     @Test("Create session with empty title should succeed")
     func testCreateSessionWithEmptyTitle() async throws {
-        let context = try await TestContext.create(testName: #function)
-        defer { _Concurrency.Task { await context.cleanup() } }
-        
-        let session = try await context.sessionManager.create(title: "")
-        #expect(session.title == "")
-        #expect(session.id != UUID())
+        try await withTestContext(testName: #function) { context in
+            let session = try await context.sessionManager.create(title: "")
+            #expect(session.title == "")
+            
+            // Verify session was saved to database
+            let fetched = try await context.sessionManager.get(id: session.id)
+            #expect(fetched.id == session.id)
+            #expect(fetched.title == "")
+        }
     }
     
     // MARK: - Get Tests
@@ -115,7 +125,7 @@ struct SessionManagerTests {
         let before = Date()
         
         // Small delay to ensure time difference  
-        try? await _Concurrency.Task.sleep(nanoseconds: 100_000_000) // 0.1 second
+        try? await _Concurrency.Task.sleep(nanoseconds: 100_000_000)
         
         let session1 = try await context.sessionManager.create(title: "Session 1")
         let session2 = try await context.sessionManager.create(title: "Session 2")
@@ -141,11 +151,11 @@ struct SessionManagerTests {
         let session1 = try await context.sessionManager.create(title: "Session 1")
         
         // Small delay
-        try? await _Concurrency.Task.sleep(nanoseconds: 100_000_000) // 0.1 second
+        try? await _Concurrency.Task.sleep(nanoseconds: 100_000_000)
         
         let middle = Date()
         
-        try? await _Concurrency.Task.sleep(nanoseconds: 100_000_000) // 0.1 second
+        try? await _Concurrency.Task.sleep(nanoseconds: 100_000_000)
         
         let session2 = try await context.sessionManager.create(title: "Session 2")
         

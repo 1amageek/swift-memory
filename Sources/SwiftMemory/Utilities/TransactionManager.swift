@@ -22,8 +22,9 @@ public struct TransactionManager {
                 
                 // Check if error is retryable
                 if isRetryableError(error) && attempt < maxAttempts {
-                    // Exponential backoff
-                    let backoffDelay = delay * attempt
+                    // Exponential backoff with safe Duration calculation
+                    let milliseconds = 100 * attempt // Base delay of 100ms
+                    let backoffDelay = Duration.milliseconds(Int64(milliseconds))
                     // Use Foundation's Task.sleep method
                     try await _Concurrency.Task.sleep(for: backoffDelay)
                 } else {

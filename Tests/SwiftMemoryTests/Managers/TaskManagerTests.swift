@@ -24,7 +24,11 @@ struct TaskManagerTests {
         #expect(task.status == .pending)
         #expect(task.difficulty == 3) // Default
         #expect(task.assignee == nil)
-        #expect(task.id != UUID())
+        
+        // Verify task was saved to database
+        let fetched = try await context.taskManager.get(id: task.id)
+        #expect(fetched.id == task.id)
+        #expect(fetched.title == "Basic Task")
     }
     
     @Test("Create task with all fields")
@@ -98,6 +102,28 @@ struct TaskManagerTests {
                 sessionID: session.id,
                 title: "Task",
                 parentTaskID: fakeParentID
+            )
+        }
+    }
+    
+    @Test("Task cannot be its own parent")
+    func testSelfLoopPrevention() async throws {
+        let context = try await TestContext.create(testName: #function)
+        defer { _Concurrency.Task { await context.cleanup() } }
+        
+        let session = try await context.helpers.createSampleSession()
+        
+        // First create a task
+        let task = try await context.taskManager.create(
+            sessionID: session.id,
+            title: "Test Task"
+        )
+        
+        // Try to update it to be its own parent
+        await context.helpers.expectMemoryError(code: .invalidInput) {
+            try await context.taskManager.update(
+                id: task.id,
+                parentTaskID: task.id
             )
         }
     }
@@ -550,6 +576,24 @@ struct TaskManagerTests {
         } catch {
             // Expected error
             #expect(error is MemoryError)
+        }
+    }
+    
+    @Test("Reorder with duplicate IDs throws error")
+    func testReorderDuplicateIDs() async throws {
+        let context = try await TestContext.create(testName: #function)
+        defer { _Concurrency.Task { await context.cleanup() } }
+        
+        let session = try await context.helpers.createSampleSession()
+        let task1 = try await context.helpers.createSampleTask(in: session, title: "Task 1")
+        let task2 = try await context.helpers.createSampleTask(in: session, title: "Task 2")
+        
+        // Try to reorder with duplicate IDs
+        await context.helpers.expectMemoryError(code: .invalidInput) {
+            try await context.taskManager.reorder(
+                sessionID: session.id,
+                orderedIds: [task1.id, task2.id, task1.id] // Duplicate task1.id
+            )
         }
     }
     

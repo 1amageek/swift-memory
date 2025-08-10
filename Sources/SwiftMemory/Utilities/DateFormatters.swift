@@ -1,16 +1,12 @@
 import Foundation
 
-/// Shared date formatters to avoid recreation overhead
+/// Thread-safe date formatters
 public enum DateFormatters {
-    /// ISO8601 formatter for API date strings
-    nonisolated(unsafe) public static let iso8601: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter
-    }()
+    // Thread-safe lock for DateFormatter access
+    private static let lock = NSLock()
     
-    /// User-friendly date formatter
-    public static let display: DateFormatter = {
+    // Shared formatters (accessed only through locked methods)
+    private static let _display: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
@@ -18,12 +14,33 @@ public enum DateFormatters {
         return formatter
     }()
     
-    /// Relative date formatter (e.g., "2 hours ago")
+    /// ISO8601 formatter for API date strings (thread-safe)
+    nonisolated(unsafe) public static let iso8601: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+    
+    /// Relative date formatter (thread-safe)
     nonisolated(unsafe) public static let relative: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
         return formatter
     }()
+    
+    /// Thread-safe display date formatting
+    public static func formatDisplay(_ date: Date) -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return _display.string(from: date)
+    }
+    
+    /// Thread-safe display date parsing
+    public static func parseDisplay(_ string: String) -> Date? {
+        lock.lock()
+        defer { lock.unlock() }
+        return _display.date(from: string)
+    }
 }
 
 // MARK: - Date Extension for Formatting
@@ -34,9 +51,9 @@ public extension Date {
         DateFormatters.iso8601.string(from: self)
     }
     
-    /// Format date for display
+    /// Format date for display (thread-safe)
     var displayString: String {
-        DateFormatters.display.string(from: self)
+        DateFormatters.formatDisplay(self)
     }
     
     /// Format date as relative time

@@ -184,3 +184,23 @@ public final class TestContext: @unchecked Sendable {
         return tasks
     }
 }
+
+// MARK: - Test Execution Helper
+
+/// Execute a test with automatic TestContext creation and cleanup
+/// This ensures cleanup is properly awaited before the test completes
+public func withTestContext(
+    testName: String = #function,
+    _ body: (TestContext) async throws -> Void
+) async throws {
+    let context = try await TestContext.create(testName: testName)
+    do {
+        try await body(context)
+    } catch {
+        // Ensure cleanup happens even on error
+        await context.cleanup()
+        throw error
+    }
+    // Normal cleanup
+    await context.cleanup()
+}

@@ -63,8 +63,9 @@ public actor TestDatabaseProvider: DatabaseContextProvider {
             print("🔧 TestDatabaseProvider initialization complete")
         } catch {
             print("❌ TestDatabaseProvider initialization failed: \(error)")
-            if let kuzuError = error as? KuzuError {
-                print("❌ KuzuError details: \(kuzuError)")
+            // KuzuError type is ambiguous, just print the error as-is
+            if let kuzuExtError = error as? KuzuSwiftExtension.KuzuError {
+                print("❌ KuzuError details: \(kuzuExtError)")
             }
             throw error
         }

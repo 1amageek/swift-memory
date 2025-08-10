@@ -53,14 +53,14 @@ public struct CypherQueryBuilder {
         
         public static func delete(id: UUID, cascade: Bool) -> (query: String, bindings: [String: any Sendable]) {
             if cascade {
+                // Note: This is not currently used but kept for API compatibility
+                // Actual implementation uses separate queries in SessionManager
                 return (
                     query: """
                         MATCH (s:Session {id: $sessionID})
                         OPTIONAL MATCH (s)-[:HasTask]->(t:Task)
                         OPTIONAL MATCH (t)-[:SubTaskOf*]->(child:Task)
-                        WITH s, COLLECT(DISTINCT t) + COLLECT(DISTINCT child) AS allTasks
-                        DETACH DELETE s
-                        FOREACH (task IN allTasks | DETACH DELETE task)
+                        DETACH DELETE child, t, s
                         RETURN COUNT(*) as deleted
                         """,
                     bindings: ["sessionID": id]
@@ -112,7 +112,7 @@ public struct CypherQueryBuilder {
                 query += " WHERE " + whereConditions.joined(separator: " AND ")
             }
             
-            query += " RETURN t ORDER BY r.order ASC"
+            query += " RETURN t ORDER BY r.`order` ASC"
             
             return (query: query, bindings: bindings)
         }
@@ -121,7 +121,7 @@ public struct CypherQueryBuilder {
             return (
                 query: """
                     MATCH (s:Session {id: $sessionID})-[r:HasTask]->(t:Task)
-                    RETURN MAX(r.order) as maxOrder
+                    RETURN max(r.`order`) as maxOrder
                     """,
                 bindings: ["sessionID": sessionID]
             )
@@ -132,10 +132,10 @@ public struct CypherQueryBuilder {
                 query: """
                     MATCH (s:Session {id: $sessionID}), (t:Task {id: $taskID})
                     MERGE (s)-[r:HasTask]->(t)
-                    SET r.order = $order
+                    SET r.`order` = $orderValue
                     RETURN r
                     """,
-                bindings: ["sessionID": sessionID, "taskID": taskID, "order": order]
+                bindings: ["sessionID": sessionID, "taskID": taskID, "orderValue": order]
             )
         }
         
@@ -152,19 +152,19 @@ public struct CypherQueryBuilder {
         
         public static func reorderTasks(sessionID: UUID, taskOrders: [(UUID, Int)]) -> (query: String, bindings: [String: any Sendable]) {
             let updateClauses = taskOrders.enumerated().map { index, taskOrder in
-                "WHEN t.id = $taskID\(index) THEN $order\(index)"
+                "WHEN t.id = $taskID\(index) THEN $orderValue\(index)"
             }.joined(separator: " ")
             
             var bindings: [String: any Sendable] = ["sessionID": sessionID]
             for (index, (taskID, order)) in taskOrders.enumerated() {
                 bindings["taskID\(index)"] = taskID
-                bindings["order\(index)"] = order
+                bindings["orderValue\(index)"] = order
             }
             
             return (
                 query: """
                     MATCH (s:Session {id: $sessionID})-[r:HasTask]->(t:Task)
-                    SET r.order = CASE \(updateClauses) ELSE r.order END
+                    SET r.`order` = CASE \(updateClauses) ELSE r.`order` END
                     RETURN COUNT(*) as updated
                     """,
                 bindings: bindings
