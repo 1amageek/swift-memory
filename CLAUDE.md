@@ -81,9 +81,12 @@ All tools follow `memory.[domain].[verb]` naming:
 
 ### Key Constraints
 - Tasks ordered within sessions via `HasTask.order`
-- Dependency graph must remain acyclic
+- Dependency graph must remain acyclic (DAG)
+- Tasks cannot be their own parent (self-loop prevention)
+- Dependencies cannot create cycles (automatic detection)
 - Difficulty scale: 1-5 (1=easy, 5=hard, default=3)
 - Single assignee per task (string)
+- Cascade deletion uses [:SubTaskOf*1..] pattern to exclude self
 
 ## LLM Agent Usage Patterns
 
@@ -113,3 +116,75 @@ memory.dependency.add { blockerID: "T1", blockedID: "T2" }
 // Find ready tasks for difficulty level 3 or below
 memory.task.list { sessionID: "S1", readyOnly: true, difficultyMax: 3 }
 ```
+
+## Data Integrity Safeguards
+
+### Self-Loop Prevention
+- **TaskManager**: Tasks cannot be their own parent
+- **DependencyManager**: Tasks cannot block themselves
+- Both managers check for self-loops before any database operations
+- Error: `MemoryError.invalidInput` with descriptive reason
+
+### Cycle Detection
+- Parent-child relationships (SubTaskOf) prevent cycles
+- Dependency relationships (Blocks) maintain DAG property
+- Uses path queries to detect potential cycles before creating relationships
+- Error: `MemoryError.circularDependency` with involved task IDs
+
+### Transaction Atomicity
+- `TaskManager.create()` wraps all operations in a transaction
+- `DependencyManager.add()` ensures atomic validation and creation
+- Automatic rollback on any failure during compound operations
+
+## Performance Optimizations
+
+### Batch Validation
+- Task reordering uses single UNWIND query instead of N individual queries
+- Example: Validating 100 tasks reduced from 100 queries to 1 query
+- Pattern: `UNWIND $taskIDs AS taskID ... RETURN collect(t.id)`
+
+### Query Optimization Patterns
+- Use MERGE instead of CREATE for idempotent edge creation
+- Batch operations with UNWIND for multiple updates
+- Indexed lookups on UUID fields for O(1) access
+
+## Thread Safety & Concurrency
+
+### DateFormatter Thread Safety
+- All shared DateFormatter instances protected with NSLock
+- Thread-safe access methods: `formatDisplay()`, `parseDisplay()`
+- ISO8601 and RelativeDateTimeFormatter are inherently thread-safe
+
+### KuzuDB Transaction Limitations
+- **Important**: KuzuDB does not support concurrent transactions on the same connection
+- Concurrent read operations are safe
+- Write operations should be executed sequentially
+- For concurrent writes, use separate database connections
+
+### Actor-Based Concurrency
+- All managers (SessionManager, TaskManager, DependencyManager) are Swift actors
+- Ensures thread-safe access to manager methods
+- Database operations are serialized at the actor level
+
+## Testing Guidelines
+
+### TestContext Pattern
+```swift
+// Use withTestContext for automatic cleanup
+try await withTestContext(testName: #function) { context in
+    // Test code here
+    let session = try await context.sessionManager.create(title: "Test")
+    // Context automatically cleaned up after block
+}
+```
+
+### Test Helpers
+- `expectMemoryError(code:when:)` - Validate specific error codes
+- `assertTasksEqual()` - Compare tasks with tolerance for timestamps
+- `withTestContext()` - Ensure proper async cleanup
+- Isolated database per test for true isolation
+
+### Concurrent Test Considerations
+- Test concurrent reads, not concurrent writes
+- Use sequential operations for write-heavy tests
+- TaskGroup for testing concurrent read patterns

@@ -242,6 +242,16 @@ Both task dependencies (Blocks) and hierarchies (SubTaskOf) automatically detect
 // This will throw MemoryError.circularDependency
 try await DependencyManager.shared.add(blockerID: taskB.id, blockedID: taskA.id)
 // if taskA already blocks taskB
+
+// Self-loops are also prevented
+// This will throw MemoryError.invalidInput
+try await DependencyManager.shared.add(blockerID: task.id, blockedID: task.id)
+// Error: "Task cannot block itself (self-loop detected)"
+
+// Parent-child self-loops are prevented
+// This will throw MemoryError.invalidInput  
+try await TaskManager.shared.update(id: task.id, parentTaskID: task.id)
+// Error: "Task cannot be its own parent (self-loop detected)"
 ```
 
 ### Task Readiness
@@ -286,7 +296,7 @@ public enum MemoryError: LocalizedError {
     case invalidDifficulty(Int)  // Must be 1-5
     case circularDependency(blocker: UUID, blocked: UUID)
     case duplicateParent(taskID: UUID)
-    case invalidInput(field: String, reason: String)
+    case invalidInput(field: String, reason: String)  // Used for self-loops
     case databaseError(String)
 }
 
@@ -304,6 +314,31 @@ MemoryError.taskNotFound(id)
 // - Code: "TASK_NOT_FOUND"
 ```
 
+### Common Error Scenarios
+
+```swift
+// Handle self-loop errors
+do {
+    try await taskManager.update(id: task.id, parentTaskID: task.id)
+} catch let error as MemoryError {
+    switch error {
+    case .invalidInput(let field, let reason):
+        print("Invalid \(field): \(reason)")
+        // Output: "Invalid parentTaskID: Task cannot be its own parent (self-loop detected)"
+    default:
+        print("Error: \(error.localizedDescription)")
+    }
+}
+
+// Handle circular dependency errors
+do {
+    try await dependencyManager.add(blockerID: taskB.id, blockedID: taskA.id)
+} catch MemoryError.circularDependency(let blocker, let blocked) {
+    print("Cannot create dependency: would create a cycle")
+    print("Task \(blocker) → Task \(blocked)")
+}
+```
+
 ### Error Mapping
 
 All tools provide helpful error messages with recovery suggestions:
@@ -312,6 +347,92 @@ All tools provide helpful error messages with recovery suggestions:
 // Tool error responses include recovery suggestions
 "Task not found: 123. Check the task ID or use memory.task.list to find available tasks"
 ```
+
+## Best Practices
+
+### Concurrent Operations
+
+```swift
+// ✅ Good: Concurrent reads are safe
+try await withThrowingTaskGroup(of: Task.self) { group in
+    for taskID in taskIDs {
+        group.addTask {
+            return try await taskManager.get(id: taskID)
+        }
+    }
+    for try await task in group {
+        // Process task
+    }
+}
+
+// ❌ Avoid: Concurrent writes may fail with transaction errors
+// Use sequential writes instead:
+for taskID in taskIDs {
+    try await taskManager.update(id: taskID, status: .done)
+}
+
+// ✅ Better: Use batch operations for multiple updates
+try await taskManager.updateBatch(
+    taskIDs: taskIDs,
+    status: .done
+)
+```
+
+### Error Recovery
+
+```swift
+// Implement retry logic for transient errors
+func createTaskWithRetry(
+    sessionID: UUID,
+    title: String,
+    maxAttempts: Int = 3
+) async throws -> Task {
+    for attempt in 1...maxAttempts {
+        do {
+            return try await taskManager.create(
+                sessionID: sessionID,
+                title: title
+            )
+        } catch {
+            if attempt == maxAttempts { throw error }
+            // Exponential backoff
+            try await Task.sleep(nanoseconds: UInt64(100_000_000 * attempt))
+        }
+    }
+    throw MemoryError.databaseError("Failed after \(maxAttempts) attempts")
+}
+```
+
+### Performance Tips
+
+```swift
+// Use batch operations for better performance
+// Instead of multiple individual updates:
+for task in tasks {
+    try await taskManager.update(id: task.id, assignee: "Alice")
+}
+
+// Use batch update:
+let taskIDs = tasks.map(\.id)
+try await taskManager.updateBatch(taskIDs: taskIDs, assignee: "Alice")
+
+// Use include options to reduce queries
+// Instead of multiple queries:
+let task = try await taskManager.get(id: taskID)
+let parent = try await taskManager.getParent(taskID: taskID)
+let children = try await taskManager.getChildren(taskID: taskID)
+
+// Use single query with includes:
+let fullInfo = try await taskManager.getWithIncludes(
+    taskID: taskID,
+    include: TaskIncludeOptions(parent: true, children: true)
+)
+```
+
+## Limitations
+
+- **Concurrent Transactions**: KuzuDB does not support concurrent transactions on the same connection. Use sequential writes or separate connections for parallel write operations.
+- **Recommended Workaround**: Use batch operations for multiple updates, or implement a queue for write operations.
 
 ## API Improvements
 
