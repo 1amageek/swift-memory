@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import Kuzu
 import KuzuSwiftExtension
 @testable import SwiftMemory
 
@@ -21,36 +22,52 @@ public actor TestDatabaseProvider: DatabaseContextProvider {
     public func initialize() async throws {
         guard !isInitialized else { return }
         
-        // Create configuration with test-specific database path
-        let configuration = GraphConfiguration(
-            databasePath: dbPath,
-            options: GraphConfiguration.Options(
-                migrationPolicy: .safeOnly,
-                enableLogging: false
+        print("🔧 TestDatabaseProvider: Starting initialization for test '\(testName)'")
+        print("🔧 Database path: \(dbPath)")
+        
+        do {
+            // Create configuration with test-specific database path
+            let configuration = GraphConfiguration(
+                databasePath: dbPath,
+                options: GraphConfiguration.Options(
+                    migrationPolicy: .safeOnly,
+                    enableLogging: false
+                )
             )
-        )
-        
-        // Create context
-        let context = try await GraphContext(configuration: configuration)
-        
-        // Apply schema using MigrationManager
-        let migrationManager = MigrationManager(
-            context: context,
-            policy: .safeOnly
-        )
-        
-        let models: [any _KuzuGraphModel.Type] = [
-            Session.self,
-            Task.self,
-            HasTask.self,
-            SubTaskOf.self,
-            Blocks.self
-        ]
-        
-        try await migrationManager.migrate(types: models)
-        
-        self.graphContext = context
-        isInitialized = true
+            
+            print("🔧 Configuration created, creating GraphContext...")
+            // Create context
+            let context = try await GraphContext(configuration: configuration)
+            print("🔧 GraphContext created successfully")
+            
+            // Apply schema using MigrationManager
+            let migrationManager = MigrationManager(
+                context: context,
+                policy: .safeOnly
+            )
+            
+            let models: [any _KuzuGraphModel.Type] = [
+                Session.self,
+                Task.self,
+                HasTask.self,
+                SubTaskOf.self,
+                Blocks.self
+            ]
+            
+            print("🔧 Running migration for \(models.count) models...")
+            try await migrationManager.migrate(types: models)
+            print("🔧 Migration completed successfully")
+            
+            self.graphContext = context
+            isInitialized = true
+            print("🔧 TestDatabaseProvider initialization complete")
+        } catch {
+            print("❌ TestDatabaseProvider initialization failed: \(error)")
+            if let kuzuError = error as? KuzuError {
+                print("❌ KuzuError details: \(kuzuError)")
+            }
+            throw error
+        }
     }
     
     public func context() async throws -> GraphContext {

@@ -16,7 +16,7 @@
       "location" : "https://github.com/1amageek/kuzu-swift-extension.git",
       "state" : {
         "branch" : "main",
-        "revision" : "ac5348d6e9e4bdec61e36fc70d0b2f279608cffd"
+        "revision" : "9edb179a91ca2f8aa968cb1971375f52120ea91c"
       }
     },
     {
@@ -25,7 +25,7 @@
       "location" : "https://github.com/1amageek/OpenFoundationModels.git",
       "state" : {
         "branch" : "main",
-        "revision" : "a1c07a76b32b709963a787adc3699a03b2f9756a"
+        "revision" : "cc6e5b7412c50088df076b30d327f4cdd149d504"
       }
     },
     {
