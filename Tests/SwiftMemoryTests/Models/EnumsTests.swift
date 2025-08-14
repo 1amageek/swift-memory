@@ -119,23 +119,23 @@ struct EnumsTests {
     
     @Test("TaskIncludeOptions should detect enabled options")
     func testTaskIncludeOptionsHasAnyEnabled() {
-        let empty = TaskIncludeOptions()
+        let empty = TaskIncludeOptions.create()
         #expect(empty.hasAnyEnabled == false)
         
-        let withParent = TaskIncludeOptions(parent: true)
+        let withParent = TaskIncludeOptions.create(parent: true)
         #expect(withParent.hasAnyEnabled == true)
         
-        let withChildren = TaskIncludeOptions(children: true)
+        let withChildren = TaskIncludeOptions.create(children: true)
         #expect(withChildren.hasAnyEnabled == true)
         
-        let withMultiple = TaskIncludeOptions(
+        let withMultiple = TaskIncludeOptions.create(
             parent: true,
             children: true,
             dependencies: true
         )
         #expect(withMultiple.hasAnyEnabled == true)
         
-        let allFalse = TaskIncludeOptions(
+        let allFalse = TaskIncludeOptions.create(
             parent: false,
             children: false,
             dependencies: false,
@@ -147,7 +147,7 @@ struct EnumsTests {
     
     @Test("TaskIncludeOptions should be codable")
     func testTaskIncludeOptionsCodable() throws {
-        let options = TaskIncludeOptions(
+        let options = TaskIncludeOptions.create(
             parent: true,
             children: false,
             dependencies: true,

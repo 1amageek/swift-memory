@@ -99,6 +99,31 @@ extension TaskIncludeOptions {
     public var hasAnyEnabled: Bool {
         [parent, children, dependencies, fullChain, session].contains { $0 == true }
     }
+    
+    /// Convenience initializer for regular Swift usage
+    /// Creates TaskIncludeOptions from individual parameters
+    public static func create(
+        parent: Bool? = nil,
+        children: Bool? = nil,
+        dependencies: Bool? = nil,
+        fullChain: Bool? = nil,
+        session: Bool? = nil
+    ) -> TaskIncludeOptions {
+        // Build JSON dictionary
+        var json: [String: Any] = [:]
+        if let parent = parent { json["parent"] = parent }
+        if let children = children { json["children"] = children }
+        if let dependencies = dependencies { json["dependencies"] = dependencies }
+        if let fullChain = fullChain { json["fullChain"] = fullChain }
+        if let session = session { json["session"] = session }
+        
+        // Convert to JSON string
+        let jsonData = try! JSONSerialization.data(withJSONObject: json, options: [])
+        let jsonString = String(data: jsonData, encoding: .utf8) ?? "{}"
+        
+        // Use the @Generable initializer
+        return try! TaskIncludeOptions(GeneratedContent(json: jsonString))
+    }
 }
 
 // MARK: - Batch Update Options
