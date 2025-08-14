@@ -1,6 +1,7 @@
 import Foundation
 import OpenFoundationModels
 import OpenFoundationModelsCore
+import OpenFoundationModelsMacros
 
 /// Unified dependency management tool that combines add and remove operations
 public struct DependencySetTool: Tool {
@@ -48,15 +49,14 @@ public struct DependencySetTool: Tool {
 
 // MARK: - Arguments
 
-public struct SetDependencyArguments: Codable, ConvertibleFromGeneratedContent {
+@Generable
+public struct SetDependencyArguments: Sendable {
+    @Guide(description: "Action to perform", .enumeration(["add", "remove"]))
     public let action: DependencyAction
-    public let blockerID: UUID
-    public let blockedID: UUID
     
-    public init(_ content: GeneratedContent) throws {
-        let decoder = JSONDecoder()
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(content)
-        self = try decoder.decode(Self.self, from: data)
-    }
+    @Guide(description: "Task that blocks another task")
+    public let blockerID: UUID
+    
+    @Guide(description: "Task that is blocked")
+    public let blockedID: UUID
 }

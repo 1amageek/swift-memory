@@ -1,157 +1,151 @@
 import Foundation
 import OpenFoundationModels
 import OpenFoundationModelsCore
+import OpenFoundationModelsMacros
 
 // MARK: - Task Tool Arguments
 
-public struct CreateTaskArguments: Codable, ConvertibleFromGeneratedContent {
+@Generable
+public struct CreateTaskArguments {
+    @Guide(description: "The session ID this task belongs to")
     public let sessionID: UUID
+    
+    @Guide(description: "Task title")
     public let title: String
+    
+    @Guide(description: "Optional task description")
     public let description: String?
+    
+    @Guide(description: "Task difficulty level", .range(1...5))
     public let difficulty: Int?
+    
+    @Guide(description: "Person assigned to this task")
     public let assignee: String?
+    
+    @Guide(description: "Optional parent task ID for subtasks")
     public let parentTaskID: UUID?
-    
-    public init(_ content: GeneratedContent) throws {
-        let decoder = JSONDecoder()
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(content)
-        self = try decoder.decode(Self.self, from: data)
-    }
 }
 
-public struct UpdateTaskArguments: Codable, ConvertibleFromGeneratedContent {
-    public let taskID: UUID?  // Single task update (backward compatibility)
-    public let taskIDs: [UUID]?  // Batch update (new)
+@Generable
+public struct UpdateTaskArguments {
+    @Guide(description: "Single task ID for backward compatibility")
+    public let taskID: UUID?
+    
+    @Guide(description: "Multiple task IDs for batch update")
+    public let taskIDs: [UUID]?
+    
+    @Guide(description: "Updates to apply to the task(s)")
     public let update: TaskUpdate
-    
-    public init(_ content: GeneratedContent) throws {
-        let decoder = JSONDecoder()
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(content)
-        self = try decoder.decode(Self.self, from: data)
-    }
 }
 
+@Generable
 public struct TaskUpdate: Codable, Sendable {
+    @Guide(description: "New task title")
     public let title: String?
+    
+    @Guide(description: "New task description")
     public let description: String?
+    
+    @Guide(description: "New task status")
     public let status: TaskStatus?
+    
+    @Guide(description: "New assignee")
     public let assignee: String?
+    
+    @Guide(description: "New difficulty level", .range(1...5))
     public let difficulty: Int?
+    
+    @Guide(description: "Reason for cancellation")
     public let cancelReason: String?
 }
 
-public struct GetTaskArguments: Codable, ConvertibleFromGeneratedContent {
+@Generable
+public struct GetTaskArguments {
+    @Guide(description: "The task ID to retrieve")
     public let taskID: UUID
+    
+    @Guide(description: "Optional data to include in response")
     public let include: TaskIncludeOptions?
-    
-    public init(_ content: GeneratedContent) throws {
-        let decoder = JSONDecoder()
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(content)
-        self = try decoder.decode(Self.self, from: data)
-    }
 }
 
-public struct DeleteTaskArguments: Codable, ConvertibleFromGeneratedContent {
+@Generable
+public struct DeleteTaskArguments {
+    @Guide(description: "The task ID to delete")
     public let taskID: UUID
+    
+    @Guide(description: "Whether to cascade delete subtasks")
     public let cascade: Bool?
-    
-    public init(_ content: GeneratedContent) throws {
-        let decoder = JSONDecoder()
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(content)
-        self = try decoder.decode(Self.self, from: data)
-    }
 }
 
-public struct ListTasksArguments: Codable, ConvertibleFromGeneratedContent {
+@Generable
+public struct ListTasksArguments {
+    @Guide(description: "Filter by session ID")
     public let sessionID: UUID?
-    public let status: TaskStatus?
-    public let assignee: String?
-    public let parentTaskID: UUID?
-    public let readyOnly: Bool?
-    public let difficultyMax: Int?
     
-    public init(_ content: GeneratedContent) throws {
-        let decoder = JSONDecoder()
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(content)
-        self = try decoder.decode(Self.self, from: data)
-    }
+    @Guide(description: "Filter by task status")
+    public let status: TaskStatus?
+    
+    @Guide(description: "Filter by assignee")
+    public let assignee: String?
+    
+    @Guide(description: "Filter by parent task ID")
+    public let parentTaskID: UUID?
+    
+    @Guide(description: "Only show tasks ready to start")
+    public let readyOnly: Bool?
+    
+    @Guide(description: "Maximum difficulty level", .range(1...5))
+    public let difficultyMax: Int?
 }
 
-public struct ReorderTasksArguments: Codable, ConvertibleFromGeneratedContent {
+@Generable
+public struct ReorderTasksArguments {
+    @Guide(description: "The session ID containing the tasks")
     public let sessionID: UUID
-    public let orderedIDs: [UUID]
     
-    public init(_ content: GeneratedContent) throws {
-        let decoder = JSONDecoder()
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(content)
-        self = try decoder.decode(Self.self, from: data)
-    }
+    @Guide(description: "Task IDs in the desired order")
+    public let orderedIDs: [UUID]
 }
 
 // MARK: - Session Tool Arguments
 
-public struct CreateSessionArguments: Codable, ConvertibleFromGeneratedContent {
+@Generable
+public struct CreateSessionArguments {
+    @Guide(description: "Session title")
     public let title: String
-    
-    public init(_ content: GeneratedContent) throws {
-        let decoder = JSONDecoder()
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(content)
-        self = try decoder.decode(Self.self, from: data)
-    }
 }
 
-public struct UpdateSessionArguments: Codable, ConvertibleFromGeneratedContent {
+@Generable
+public struct UpdateSessionArguments {
+    @Guide(description: "The session ID to update")
     public let sessionID: UUID
+    
+    @Guide(description: "New session title")
     public let title: String
-    
-    public init(_ content: GeneratedContent) throws {
-        let decoder = JSONDecoder()
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(content)
-        self = try decoder.decode(Self.self, from: data)
-    }
 }
 
-public struct GetSessionArguments: Codable, ConvertibleFromGeneratedContent {
+@Generable
+public struct GetSessionArguments {
+    @Guide(description: "The session ID to retrieve")
     public let sessionID: UUID
-    
-    public init(_ content: GeneratedContent) throws {
-        let decoder = JSONDecoder()
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(content)
-        self = try decoder.decode(Self.self, from: data)
-    }
 }
 
-public struct DeleteSessionArguments: Codable, ConvertibleFromGeneratedContent {
+@Generable
+public struct DeleteSessionArguments {
+    @Guide(description: "The session ID to delete")
     public let sessionID: UUID
+    
+    @Guide(description: "Whether to cascade delete all tasks")
     public let cascade: Bool?
-    
-    public init(_ content: GeneratedContent) throws {
-        let decoder = JSONDecoder()
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(content)
-        self = try decoder.decode(Self.self, from: data)
-    }
 }
 
-public struct ListSessionsArguments: Codable, ConvertibleFromGeneratedContent {
+@Generable
+public struct ListSessionsArguments {
+    @Guide(description: "Filter sessions started after this date")
     public let startedAfter: Date?
-    public let startedBefore: Date?
     
-    public init(_ content: GeneratedContent) throws {
-        let decoder = JSONDecoder()
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(content)
-        self = try decoder.decode(Self.self, from: data)
-    }
+    @Guide(description: "Filter sessions started before this date")
+    public let startedBefore: Date?
 }
 
 // MARK: - Dependency Tool Arguments

@@ -1,5 +1,5 @@
 {
-  "originHash" : "40be77b7a9ac039008f25183ac39b594a20934d651083933f11f2d254e4e2af0",
+  "originHash" : "e6734d20df4b8eee4fdbb315cfc60ddef55cdd85329f4745291c6b6c2e5afd3b",
   "pins" : [
     {
       "identity" : "kuzu-swift",
@@ -16,7 +16,7 @@
       "location" : "https://github.com/1amageek/kuzu-swift-extension.git",
       "state" : {
         "branch" : "main",
-        "revision" : "f804f8cce6745041ddfb5671a69b5cd2074a42c9"
+        "revision" : "cedd319655addbc0a5a1e5b6411a36e9dc6a6f15"
       }
     },
     {
@@ -25,7 +25,7 @@
       "location" : "https://github.com/1amageek/OpenFoundationModels.git",
       "state" : {
         "branch" : "main",
-        "revision" : "cc6e5b7412c50088df076b30d327f4cdd149d504"
+        "revision" : "6efbc64121dbc63fdcf992696b9a23654e13f55f"
       }
     },
     {

@@ -1,9 +1,13 @@
 import Foundation
+import OpenFoundationModels
+import OpenFoundationModelsCore
+import OpenFoundationModelsMacros
 
 // MARK: - Task Difficulty
 
 /// Task difficulty level with clear, intuitive naming
-public enum TaskDifficulty: String, Codable, CaseIterable, Sendable {
+@Generable
+public enum TaskDifficulty: String, CaseIterable, Sendable {
     case trivial = "trivial"
     case easy = "easy"
     case medium = "medium"
@@ -53,16 +57,16 @@ public enum TaskDifficulty: String, Codable, CaseIterable, Sendable {
 
 // MARK: - Dependency Action
 
-/// Actions for dependency management
-public enum DependencyAction: String, Codable, Sendable {
+@Generable
+public enum DependencyAction: String, Sendable {
     case add = "add"
     case remove = "remove"
 }
 
 // MARK: - Dependency Query Type
 
-/// Types of dependency information to retrieve
-public enum DependencyQueryType: String, Codable, Sendable {
+@Generable
+public enum DependencyQueryType: String, Sendable {
     case chain = "chain"           // Full upstream and downstream chain
     case blockers = "blockers"     // Tasks that block this task
     case blocking = "blocking"     // Tasks blocked by this task
@@ -72,27 +76,25 @@ public enum DependencyQueryType: String, Codable, Sendable {
 // MARK: - Include Options for Task Queries
 
 /// Options for including related information in task queries
-public struct TaskIncludeOptions: Codable, Sendable {
+@Generable
+public struct TaskIncludeOptions: Sendable {
+    @Guide(description: "Include parent task information")
     public var parent: Bool?
+    
+    @Guide(description: "Include child tasks")
     public var children: Bool?
+    
+    @Guide(description: "Include dependency information")
     public var dependencies: Bool?
+    
+    @Guide(description: "Include full dependency chain")
     public var fullChain: Bool?
+    
+    @Guide(description: "Include session information")
     public var session: Bool?
-    
-    public init(
-        parent: Bool? = nil,
-        children: Bool? = nil,
-        dependencies: Bool? = nil,
-        fullChain: Bool? = nil,
-        session: Bool? = nil
-    ) {
-        self.parent = parent
-        self.children = children
-        self.dependencies = dependencies
-        self.fullChain = fullChain
-        self.session = session
-    }
-    
+}
+
+extension TaskIncludeOptions {
     /// Check if any options are enabled
     public var hasAnyEnabled: Bool {
         [parent, children, dependencies, fullChain, session].contains { $0 == true }
@@ -101,8 +103,8 @@ public struct TaskIncludeOptions: Codable, Sendable {
 
 // MARK: - Batch Update Options
 
-/// Options for batch updating tasks
-public struct TaskBatchUpdate: Codable, Sendable {
+@Generable
+public struct TaskBatchUpdate: Sendable {
     public var title: String?
     public var description: String?
     public var status: TaskStatus?

@@ -1,6 +1,7 @@
 import Foundation
 import OpenFoundationModels
 import OpenFoundationModelsCore
+import OpenFoundationModelsMacros
 
 /// Unified dependency query tool that combines chain and blocked status queries
 public struct DependencyGetTool: Tool {
@@ -50,14 +51,11 @@ public struct DependencyGetTool: Tool {
 
 // MARK: - Arguments
 
-public struct GetDependencyArguments: Codable, ConvertibleFromGeneratedContent {
+@Generable
+public struct GetDependencyArguments: Sendable {
+    @Guide(description: "Task ID to get dependencies for")
     public let taskID: UUID
-    public let type: DependencyQueryType
     
-    public init(_ content: GeneratedContent) throws {
-        let decoder = JSONDecoder()
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(content)
-        self = try decoder.decode(Self.self, from: data)
-    }
+    @Guide(description: "Type of dependency query", .enumeration(["chain", "blockers", "blocking", "isBlocked"]))
+    public let type: DependencyQueryType
 }
