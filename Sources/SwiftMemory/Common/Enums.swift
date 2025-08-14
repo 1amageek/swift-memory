@@ -7,7 +7,7 @@ import OpenFoundationModelsMacros
 
 /// Task difficulty level with clear, intuitive naming
 @Generable
-public enum TaskDifficulty: String, CaseIterable, Sendable {
+public enum TaskDifficulty: String, Codable, CaseIterable, Sendable {
     case trivial = "trivial"
     case easy = "easy"
     case medium = "medium"
@@ -77,7 +77,7 @@ public enum DependencyQueryType: String, Sendable {
 
 /// Options for including related information in task queries
 @Generable
-public struct TaskIncludeOptions: Sendable {
+public struct TaskIncludeOptions: Codable, Sendable {
     @Guide(description: "Include parent task information")
     public var parent: Bool?
     
@@ -103,8 +103,7 @@ extension TaskIncludeOptions {
 
 // MARK: - Batch Update Options
 
-@Generable
-public struct TaskBatchUpdate: Sendable {
+public struct TaskBatchUpdate: Codable, Sendable {
     public var title: String?
     public var description: String?
     public var status: TaskStatus?
