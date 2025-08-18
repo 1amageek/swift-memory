@@ -51,7 +51,7 @@ public struct DependencySetTool: Tool {
 
 @Generable
 public struct SetDependencyArguments: Sendable {
-    @Guide(description: "Action to perform", .enumeration(["add", "remove"]))
+    @Guide(description: "Action to perform: add or remove")
     public let action: DependencyAction
     
     @Guide(description: "Task that blocks another task")

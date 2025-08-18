@@ -66,12 +66,11 @@ public actor TaskManager {
                 bindings: ["sessionID": sessionID]
             )
             
-            var maxOrder = 0
-            if maxOrderResult.hasNext(),
-               let tuple = try maxOrderResult.getNext(),
-               let dict = try? tuple.getAsDictionary(),
-               let orderValue = dict["maxOrder"] as? Int64 {
+            let maxOrder: Int
+            if let orderValue = try? maxOrderResult.mapFirstRequired(to: Int64.self, at: 0) {
                 maxOrder = Int(orderValue)
+            } else {
+                maxOrder = 0
             }
             let nextOrder = maxOrder + 1
             
@@ -105,13 +104,7 @@ public actor TaskManager {
                     bindings: ["parentID": parentTaskID, "childID": savedTask.id]
                 )
                 
-                var hasCycle = false
-                if cycleResult.hasNext(),
-                   let tuple = try cycleResult.getNext(),
-                   let dict = try? tuple.getAsDictionary(),
-                   let cycleValue = dict["hasCycle"] as? Bool {
-                    hasCycle = cycleValue
-                }
+                let hasCycle = try cycleResult.mapFirstRequired(to: Bool.self, at: 0)
                 
                 if hasCycle {
                     throw MemoryError.circularDependency(blocker: parentTaskID, blocked: savedTask.id)
@@ -186,17 +179,7 @@ public actor TaskManager {
             query += " RETURN t ORDER BY r.`order` ASC"
             
             let result = try await context.raw(query, bindings: bindings)
-            var tasks: [Task] = []
-            while result.hasNext() {
-                if let tuple = try result.getNext(),
-                   let dict = try? tuple.getAsDictionary(),
-                   let taskNode = dict["t"],
-                   let properties = KuzuNodeExtractor.extractNodeOrDictionary(from: taskNode) {
-                    let task = try KuzuDecoder().decode(Task.self, from: properties)
-                    tasks.append(task)
-                }
-            }
-            return tasks
+            return try result.map(to: Task.self)
             
         } else if let parentTaskID = parentTaskID {
             // Get subtasks
@@ -208,17 +191,7 @@ public actor TaskManager {
                 """,
                 bindings: ["parentID": parentTaskID]
             )
-            var tasks: [Task] = []
-            while result.hasNext() {
-                if let tuple = try result.getNext(),
-                   let dict = try? tuple.getAsDictionary(),
-                   let taskNode = dict["t"],
-                   let properties = KuzuNodeExtractor.extractNodeOrDictionary(from: taskNode) {
-                    let task = try KuzuDecoder().decode(Task.self, from: properties)
-                    tasks.append(task)
-                }
-            }
-            return tasks
+            return try result.map(to: Task.self)
             
         } else {
             // General task listing
@@ -258,17 +231,7 @@ public actor TaskManager {
                 query += " RETURN t ORDER BY t.createdAt DESC"
                 
                 let result = try await context.raw(query, bindings: bindings)
-                var tasks: [Task] = []
-                while result.hasNext() {
-                    if let tuple = try result.getNext(),
-                       let dict = try? tuple.getAsDictionary(),
-                       let taskNode = dict["t"],
-                       let properties = KuzuNodeExtractor.extractNodeOrDictionary(from: taskNode) {
-                        let task = try KuzuDecoder().decode(Task.self, from: properties)
-                        tasks.append(task)
-                    }
-                }
-                return tasks
+                return try result.map(to: Task.self)
             }
         }
     }
@@ -342,13 +305,7 @@ public actor TaskManager {
                 bindings: ["parentID": parentTaskID, "childID": id]
             )
             
-            var hasCycle = false
-            if cycleResult.hasNext(),
-               let tuple = try cycleResult.getNext(),
-               let dict = try? tuple.getAsDictionary(),
-               let cycleValue = dict["hasCycle"] as? Bool {
-                hasCycle = cycleValue
-            }
+            let hasCycle = try cycleResult.mapFirstRequired(to: Bool.self, at: 0)
             
             if hasCycle {
                 throw MemoryError.circularDependency(blocker: parentTaskID, blocked: id)
@@ -397,19 +354,19 @@ public actor TaskManager {
             bindings: ["sessionID": sessionID, "taskIDs": orderedIds]
         )
         
-        var validIDs: Set<UUID> = []
-        if validationResult.hasNext(),
-           let tuple = try validationResult.getNext(),
-           let dict = try? tuple.getAsDictionary(),
-           let idArray = dict["validIDs"] as? [Any] {
-            for id in idArray {
-                if let uuidString = id as? String,
-                   let uuid = UUID(uuidString: uuidString) {
-                    validIDs.insert(uuid)
+        let validIDs: Set<UUID>
+        if let row = try validationResult.mapFirst() {
+            let idArray = row["validIDs"] as? [Any] ?? []
+            validIDs = Set(idArray.compactMap { id in
+                if let uuidString = id as? String {
+                    return UUID(uuidString: uuidString)
                 } else if let uuid = id as? UUID {
-                    validIDs.insert(uuid)
+                    return uuid
                 }
-            }
+                return nil
+            })
+        } else {
+            validIDs = []
         }
         
         // Check for missing tasks
@@ -500,14 +457,7 @@ public actor TaskManager {
             bindings: ["taskID": taskID]
         )
         
-        if result.hasNext(),
-           let tuple = try result.getNext(),
-           let dict = try? tuple.getAsDictionary(),
-           let parentNode = dict["parent"],
-           let properties = KuzuNodeExtractor.extractNodeOrDictionary(from: parentNode) {
-            return try KuzuDecoder().decode(Task.self, from: properties)
-        }
-        return nil
+        return try result.mapFirst(to: Task.self)
     }
     
     public func getChildren(taskID: UUID) async throws -> [Task] {
@@ -523,17 +473,7 @@ public actor TaskManager {
             bindings: ["taskID": taskID]
         )
         
-        var children: [Task] = []
-        while result.hasNext() {
-            if let tuple = try result.getNext(),
-               let dict = try? tuple.getAsDictionary(),
-               let childNode = dict["child"],
-               let properties = KuzuNodeExtractor.extractNodeOrDictionary(from: childNode) {
-                let child = try KuzuDecoder().decode(Task.self, from: properties)
-                children.append(child)
-            }
-        }
-        return children
+        return try result.map(to: Task.self)
     }
     
     // MARK: - Batch Operations
@@ -627,13 +567,7 @@ public actor TaskManager {
                 bindings: ["taskID": taskID]
             )
             
-            if result.hasNext(),
-               let tuple = try result.getNext(),
-               let dict = try? tuple.getAsDictionary(),
-               let sessionNode = dict["s"],
-               let properties = KuzuNodeExtractor.extractNodeOrDictionary(from: sessionNode) {
-                session = try KuzuDecoder().decode(Session.self, from: properties)
-            }
+            session = try result.mapFirst(to: Session.self)
         }
         
         return TaskFullInfo(

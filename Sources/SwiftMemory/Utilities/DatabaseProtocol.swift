@@ -32,7 +32,7 @@ public actor DefaultDatabaseProvider: DatabaseContextProvider {
         ])
         
         // Configure migration policy
-        await GraphDatabase.shared.configure(migrationPolicy: .safeOnly)
+        await GraphDatabase.shared.configure(migrationPolicy: .safe)
         
         // Initialize context (this will create schema automatically)
         _ = try await GraphDatabase.shared.context()

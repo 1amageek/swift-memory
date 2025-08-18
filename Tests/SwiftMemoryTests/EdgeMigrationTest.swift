@@ -16,13 +16,12 @@ struct EdgeMigrationTest {
         let configuration = GraphConfiguration(
             databasePath: dbPath,
             options: GraphConfiguration.Options(
-                migrationPolicy: .safeOnly,
                 enableLogging: true
             )
         )
         
         let context = try await GraphContext(configuration: configuration)
-        let migrationManager = MigrationManager(context: context, policy: .safeOnly)
+        let migrationManager = MigrationManager(context: context, policy: .safe)
         
         print("📍 Migrating Session and Task nodes...")
         try await migrationManager.migrate(types: [Session.self, Task.self])
@@ -40,13 +39,12 @@ struct EdgeMigrationTest {
         let configuration = GraphConfiguration(
             databasePath: dbPath,
             options: GraphConfiguration.Options(
-                migrationPolicy: .safeOnly,
                 enableLogging: true
             )
         )
         
         let context = try await GraphContext(configuration: configuration)
-        let migrationManager = MigrationManager(context: context, policy: .safeOnly)
+        let migrationManager = MigrationManager(context: context, policy: .safe)
         
         print("📍 Migrating nodes and HasTask edge...")
         do {
@@ -73,13 +71,12 @@ struct EdgeMigrationTest {
         let configuration = GraphConfiguration(
             databasePath: dbPath,
             options: GraphConfiguration.Options(
-                migrationPolicy: .safeOnly,
                 enableLogging: true
             )
         )
         
         let context = try await GraphContext(configuration: configuration)
-        let migrationManager = MigrationManager(context: context, policy: .safeOnly)
+        let migrationManager = MigrationManager(context: context, policy: .safe)
         
         print("📍 Migrating nodes and SubTaskOf edge...")
         do {
@@ -106,13 +103,12 @@ struct EdgeMigrationTest {
         let configuration = GraphConfiguration(
             databasePath: dbPath,
             options: GraphConfiguration.Options(
-                migrationPolicy: .safeOnly,
                 enableLogging: true
             )
         )
         
         let context = try await GraphContext(configuration: configuration)
-        let migrationManager = MigrationManager(context: context, policy: .safeOnly)
+        let migrationManager = MigrationManager(context: context, policy: .safe)
         
         print("📍 Migrating nodes and Blocks edge...")
         do {
@@ -139,13 +135,12 @@ struct EdgeMigrationTest {
         let configuration = GraphConfiguration(
             databasePath: dbPath,
             options: GraphConfiguration.Options(
-                migrationPolicy: .safeOnly,
                 enableLogging: true
             )
         )
         
         let context = try await GraphContext(configuration: configuration)
-        let migrationManager = MigrationManager(context: context, policy: .safeOnly)
+        let migrationManager = MigrationManager(context: context, policy: .safe)
         
         print("📍 Migrating all models...")
         do {

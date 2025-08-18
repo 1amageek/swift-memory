@@ -18,7 +18,6 @@ struct MinimalKuzuTest {
         let configuration = GraphConfiguration(
             databasePath: dbPath,
             options: GraphConfiguration.Options(
-                migrationPolicy: .safeOnly,
                 enableLogging: true  // Enable logging to see more details
             )
         )
@@ -47,7 +46,6 @@ struct MinimalKuzuTest {
         let configuration = GraphConfiguration(
             databasePath: dbPath,
             options: GraphConfiguration.Options(
-                migrationPolicy: .safeOnly,
                 enableLogging: true
             )
         )
@@ -82,7 +80,6 @@ struct MinimalKuzuTest {
         let configuration = GraphConfiguration(
             databasePath: dbPath,
             options: GraphConfiguration.Options(
-                migrationPolicy: .safeOnly,
                 enableLogging: true
             )
         )
@@ -94,7 +91,7 @@ struct MinimalKuzuTest {
         print("📍 Creating MigrationManager...")
         let migrationManager = MigrationManager(
             context: context,
-            policy: .safeOnly
+            policy: .safe
         )
         
         // Try migrating just Session model

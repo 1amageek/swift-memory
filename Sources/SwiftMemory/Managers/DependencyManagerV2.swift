@@ -2,23 +2,16 @@ import Foundation
 import Kuzu
 import KuzuSwiftExtension
 
-public actor DependencyManager {
-    public static let shared = DependencyManager()
+/// Improved DependencyManager using Query DSL and Beta 2 features
+public actor DependencyManagerV2 {
+    public static let shared = DependencyManagerV2()
     
-    private let contextProvider: DatabaseContextProvider
-    
-    public init(contextProvider: DatabaseContextProvider = DefaultDatabaseProvider.shared) {
-        self.contextProvider = contextProvider
-    }
-    
-    private init() {
-        self.contextProvider = DefaultDatabaseProvider.shared
-    }
+    private init() {}
     
     // MARK: - Dependency Operations
     
     public func add(blockerID: UUID, blockedID: UUID) async throws {
-        // Check for self-loop first (before any database operations)
+        // Check for self-loop first
         guard blockerID != blockedID else {
             throw MemoryError.invalidInput(
                 field: "dependency",
@@ -26,22 +19,31 @@ public actor DependencyManager {
             )
         }
         
-        // Execute in a transaction for atomicity
-        try await TransactionManager.executeInTransaction(
-            using: contextProvider
-        ) { context in
+        let context = try await SwiftMemoryContext.shared.context()
+        
+        // Use transaction for atomicity
+        try await context.withTransaction { tx in
             // Verify both tasks exist
-            guard let _ = try await context.fetchOne(Task.self, id: blockerID) else {
+            let blockerResult = try tx.raw(
+                "MATCH (t:Task {id: $id}) RETURN t",
+                bindings: ["id": blockerID]
+            )
+            
+            guard blockerResult.hasNext() else {
                 throw MemoryError.taskNotFound(blockerID)
             }
             
-            guard let _ = try await context.fetchOne(Task.self, id: blockedID) else {
+            let blockedResult = try tx.raw(
+                "MATCH (t:Task {id: $id}) RETURN t",
+                bindings: ["id": blockedID]
+            )
+            
+            guard blockedResult.hasNext() else {
                 throw MemoryError.taskNotFound(blockedID)
             }
             
-            // Check for circular dependency - would adding blocker->blocked create a cycle?
-            // We need to check if there's already a path from blocked->blocker
-            let result = try await context.raw(
+            // Check for circular dependency using Beta 2's mapFirstRequired
+            let result = try tx.raw(
                 """
                 MATCH p = (blocked:Task {id: $blockedID})-[:Blocks*]->(blocker:Task {id: $blockerID})
                 RETURN COUNT(p) > 0 AS hasCycle
@@ -55,8 +57,8 @@ public actor DependencyManager {
                 throw MemoryError.circularDependency(blocker: blockerID, blocked: blockedID)
             }
             
-            // Create Blocks relationship using MERGE to prevent duplicates
-            _ = try await context.raw(
+            // Create Blocks relationship using MERGE
+            _ = try tx.raw(
                 """
                 MATCH (blocker:Task {id: $blockerID}), (blocked:Task {id: $blockedID})
                 MERGE (blocker)-[r:Blocks]->(blocked)
@@ -68,9 +70,8 @@ public actor DependencyManager {
     }
     
     public func remove(blockerID: UUID, blockedID: UUID) async throws {
-        let context = try await contextProvider.context()
+        let context = try await SwiftMemoryContext.shared.context()
         
-        // Remove the dependency safely
         _ = try await context.raw(
             """
             MATCH (blocker:Task {id: $blockerID})-[r:Blocks]->(blocked:Task {id: $blockedID})
@@ -82,10 +83,10 @@ public actor DependencyManager {
         )
     }
     
-    // MARK: - Query Operations
+    // MARK: - Query Operations with Beta 2 Features
     
     public func getBlockers(taskID: UUID) async throws -> [Task] {
-        let context = try await contextProvider.context()
+        let context = try await SwiftMemoryContext.shared.context()
         
         let result = try await context.raw(
             """
@@ -96,11 +97,12 @@ public actor DependencyManager {
             bindings: ["taskID": taskID]
         )
         
+        // Beta 2's map(to:) automatically handles KuzuNode extraction
         return try result.map(to: Task.self)
     }
     
     public func getBlocking(taskID: UUID) async throws -> [Task] {
-        let context = try await contextProvider.context()
+        let context = try await SwiftMemoryContext.shared.context()
         
         let result = try await context.raw(
             """
@@ -115,9 +117,8 @@ public actor DependencyManager {
     }
     
     public func isTaskBlocked(taskID: UUID) async throws -> Bool {
-        let context = try await contextProvider.context()
+        let context = try await SwiftMemoryContext.shared.context()
         
-        // Only consider pending or inProgress tasks as active blockers
         let result = try await context.raw(
             """
             MATCH (blocker:Task)-[:Blocks]->(blocked:Task {id: $taskID})
@@ -131,9 +132,9 @@ public actor DependencyManager {
     }
     
     public func getDependencyChain(taskID: UUID) async throws -> DependencyChain {
-        let context = try await contextProvider.context()
+        let context = try await SwiftMemoryContext.shared.context()
         
-        // Get all upstream dependencies with DISTINCT and min depth
+        // Get upstream dependencies
         let upstreamResult = try await context.raw(
             """
             MATCH path = (blocker:Task)-[:Blocks*]->(blocked:Task {id: $taskID})
@@ -144,17 +145,17 @@ public actor DependencyManager {
             bindings: ["taskID": taskID]
         )
         
-        // Map upstream results - Beta 2 handles KuzuNode automatically
+        // Use Beta 2's enhanced result mapping
         let upstreamRows = try upstreamResult.mapRows()
         let decoder = KuzuDecoder()
-        let upstreamData = try upstreamRows.map { row in
-            // The "blocker" column now contains the node properties (Beta 2 feature)
+        let upstream = try upstreamRows.map { row in
+            // Beta 2 automatically extracts node properties from "blocker" column
             let task = try decoder.decode(Task.self, from: row["blocker"] as! [String: Any])
             let depth = (row["depth"] as? Int64).map(Int.init) ?? 0
             return TaskWithDepth(task: task, depth: depth)
         }
         
-        // Get all downstream dependencies with DISTINCT and min depth
+        // Get downstream dependencies
         let downstreamResult = try await context.raw(
             """
             MATCH path = (blocker:Task {id: $taskID})-[:Blocks*]->(blocked:Task)
@@ -165,10 +166,8 @@ public actor DependencyManager {
             bindings: ["taskID": taskID]
         )
         
-        // Map downstream results - Beta 2 handles KuzuNode automatically
         let downstreamRows = try downstreamResult.mapRows()
-        let downstreamData = try downstreamRows.map { row in
-            // The "blocked" column now contains the node properties (Beta 2 feature)
+        let downstream = try downstreamRows.map { row in
             let task = try decoder.decode(Task.self, from: row["blocked"] as! [String: Any])
             let depth = (row["depth"] as? Int64).map(Int.init) ?? 0
             return TaskWithDepth(task: task, depth: depth)
@@ -176,36 +175,8 @@ public actor DependencyManager {
         
         return DependencyChain(
             taskID: taskID,
-            upstream: upstreamData,
-            downstream: downstreamData
+            upstream: upstream,
+            downstream: downstream
         )
-    }
-    
-    // MARK: - Private Helpers (removed - now using KuzuSwiftExtension declarative APIs)
-}
-
-// MARK: - Supporting Types
-
-public struct DependencyChain: Codable, Sendable {
-    public let taskID: UUID
-    public let upstream: [TaskWithDepth]
-    public let downstream: [TaskWithDepth]
-    
-    public var maxUpstreamDepth: Int {
-        upstream.map { $0.depth }.max() ?? 0
-    }
-    
-    public var maxDownstreamDepth: Int {
-        downstream.map { $0.depth }.max() ?? 0
-    }
-}
-
-public struct TaskWithDepth: Codable, Sendable {
-    public let task: Task
-    public let depth: Int
-    
-    public init(task: Task, depth: Int) {
-        self.task = task
-        self.depth = depth
     }
 }

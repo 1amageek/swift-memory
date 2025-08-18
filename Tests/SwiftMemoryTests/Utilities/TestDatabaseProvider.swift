@@ -30,7 +30,6 @@ public actor TestDatabaseProvider: DatabaseContextProvider {
             let configuration = GraphConfiguration(
                 databasePath: dbPath,
                 options: GraphConfiguration.Options(
-                    migrationPolicy: .safeOnly,
                     enableLogging: false
                 )
             )
@@ -43,7 +42,7 @@ public actor TestDatabaseProvider: DatabaseContextProvider {
             // Apply schema using MigrationManager
             let migrationManager = MigrationManager(
                 context: context,
-                policy: .safeOnly
+                policy: .safe
             )
             
             let models: [any _KuzuGraphModel.Type] = [

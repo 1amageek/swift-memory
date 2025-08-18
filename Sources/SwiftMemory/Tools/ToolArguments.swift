@@ -6,7 +6,7 @@ import OpenFoundationModelsMacros
 // MARK: - Task Tool Arguments
 
 @Generable
-public struct CreateTaskArguments {
+public struct CreateTaskArguments: Sendable {
     @Guide(description: "The session ID this task belongs to")
     public let sessionID: UUID
     
@@ -27,7 +27,7 @@ public struct CreateTaskArguments {
 }
 
 @Generable
-public struct UpdateTaskArguments {
+public struct UpdateTaskArguments: Sendable {
     @Guide(description: "Single task ID for backward compatibility")
     public let taskID: UUID?
     
@@ -60,7 +60,7 @@ public struct TaskUpdate: Codable, Sendable {
 }
 
 @Generable
-public struct GetTaskArguments {
+public struct GetTaskArguments: Sendable {
     @Guide(description: "The task ID to retrieve")
     public let taskID: UUID
     
@@ -69,7 +69,7 @@ public struct GetTaskArguments {
 }
 
 @Generable
-public struct DeleteTaskArguments {
+public struct DeleteTaskArguments: Sendable {
     @Guide(description: "The task ID to delete")
     public let taskID: UUID
     
@@ -78,7 +78,7 @@ public struct DeleteTaskArguments {
 }
 
 @Generable
-public struct ListTasksArguments {
+public struct ListTasksArguments: Sendable {
     @Guide(description: "Filter by session ID")
     public let sessionID: UUID?
     
@@ -99,7 +99,7 @@ public struct ListTasksArguments {
 }
 
 @Generable
-public struct ReorderTasksArguments {
+public struct ReorderTasksArguments: Sendable {
     @Guide(description: "The session ID containing the tasks")
     public let sessionID: UUID
     
@@ -110,13 +110,13 @@ public struct ReorderTasksArguments {
 // MARK: - Session Tool Arguments
 
 @Generable
-public struct CreateSessionArguments {
+public struct CreateSessionArguments: Sendable {
     @Guide(description: "Session title")
     public let title: String
 }
 
 @Generable
-public struct UpdateSessionArguments {
+public struct UpdateSessionArguments: Sendable {
     @Guide(description: "The session ID to update")
     public let sessionID: UUID
     
@@ -125,13 +125,13 @@ public struct UpdateSessionArguments {
 }
 
 @Generable
-public struct GetSessionArguments {
+public struct GetSessionArguments: Sendable {
     @Guide(description: "The session ID to retrieve")
     public let sessionID: UUID
 }
 
 @Generable
-public struct DeleteSessionArguments {
+public struct DeleteSessionArguments: Sendable {
     @Guide(description: "The session ID to delete")
     public let sessionID: UUID
     
@@ -140,7 +140,7 @@ public struct DeleteSessionArguments {
 }
 
 @Generable
-public struct ListSessionsArguments {
+public struct ListSessionsArguments: Sendable {
     @Guide(description: "Filter sessions started after this date")
     public let startedAfter: Date?
     

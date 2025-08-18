@@ -56,6 +56,6 @@ public struct GetDependencyArguments: Sendable {
     @Guide(description: "Task ID to get dependencies for")
     public let taskID: UUID
     
-    @Guide(description: "Type of dependency query", .enumeration(["chain", "blockers", "blocking", "isBlocked"]))
+    @Guide(description: "Type of dependency query: chain, blockers, blocking, or isBlocked")
     public let type: DependencyQueryType
 }

@@ -44,17 +44,7 @@ public actor SessionManager {
         )
         
         let result = try await context.raw(query, bindings: bindings)
-        var sessions: [Session] = []
-        while result.hasNext() {
-            if let tuple = try result.getNext(),
-               let dict = try? tuple.getAsDictionary(),
-               let sessionNode = dict["s"],
-               let properties = KuzuNodeExtractor.extractNodeOrDictionary(from: sessionNode) {
-                let session = try KuzuDecoder().decode(Session.self, from: properties)
-                sessions.append(session)
-            }
-        }
-        return sessions
+        return try result.map(to: Session.self)
     }
     
     public func update(id: UUID, title: String) async throws -> Session {
@@ -148,18 +138,12 @@ public actor SessionManager {
             bindings: ["sessionID": sessionID]
         )
         
-        var taskOrderPairs: [(task: Task, order: Int)] = []
-        while result.hasNext() {
-            if let tuple = try result.getNext(),
-               let dict = try? tuple.getAsDictionary(),
-               let taskNode = dict["t"],
-               let properties = KuzuNodeExtractor.extractNodeOrDictionary(from: taskNode),
-               let order = dict["taskOrder"] as? Int64 {
-                let task = try KuzuDecoder().decode(Task.self, from: properties)
-                taskOrderPairs.append((task: task, order: Int(order)))
-            }
+        let rows = try result.mapRows()
+        return try rows.map { row in
+            // Beta 2: "t" column now contains node properties automatically
+            let task = try KuzuDecoder().decode(Task.self, from: row["t"] as! [String: Any])
+            let order = (row["taskOrder"] as? Int64).map(Int.init) ?? 0
+            return (task: task, order: order)
         }
-        
-        return taskOrderPairs
     }
 }
