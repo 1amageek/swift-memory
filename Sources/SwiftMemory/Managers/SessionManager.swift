@@ -37,11 +37,26 @@ public actor SessionManager {
     ) async throws -> [Session] {
         let context = try await contextProvider.context()
         
-        // Use QueryBuilder for cleaner query construction
-        let (query, bindings) = CypherQueryBuilder.SessionQueries.list(
-            startedAfter: startedAfter,
-            startedBefore: startedBefore
-        )
+        // Build query directly
+        var query = "MATCH (s:Session)"
+        var whereConditions: [String] = []
+        var bindings: [String: any Sendable] = [:]
+        
+        if let after = startedAfter {
+            whereConditions.append("s.startedAt >= $startedAfter")
+            bindings["startedAfter"] = after
+        }
+        
+        if let before = startedBefore {
+            whereConditions.append("s.startedAt <= $startedBefore")
+            bindings["startedBefore"] = before
+        }
+        
+        if !whereConditions.isEmpty {
+            query += " WHERE " + whereConditions.joined(separator: " AND ")
+        }
+        
+        query += " RETURN s ORDER BY s.startedAt DESC"
         
         let result = try await context.raw(query, bindings: bindings)
         return try result.map(to: Session.self)
