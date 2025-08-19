@@ -17,7 +17,7 @@ public actor DependencyManager {
     
     // MARK: - Dependency Operations
     
-    public func add(blockerID: UUID, blockedID: UUID) async throws {
+    public func add(blockerID: String, blockedID: String) async throws {
         // Check for self-loop first (before any database operations)
         guard blockerID != blockedID else {
             throw MemoryError.invalidInput(
@@ -67,7 +67,7 @@ public actor DependencyManager {
         }
     }
     
-    public func remove(blockerID: UUID, blockedID: UUID) async throws {
+    public func remove(blockerID: String, blockedID: String) async throws {
         let context = try await contextProvider.context()
         
         // Remove the dependency safely
@@ -84,7 +84,7 @@ public actor DependencyManager {
     
     // MARK: - Query Operations
     
-    public func getBlockers(taskID: UUID) async throws -> [Task] {
+    public func getBlockers(taskID: String) async throws -> [Task] {
         let context = try await contextProvider.context()
         
         let result = try await context.raw(
@@ -99,7 +99,7 @@ public actor DependencyManager {
         return try result.map(to: Task.self)
     }
     
-    public func getBlocking(taskID: UUID) async throws -> [Task] {
+    public func getBlocking(taskID: String) async throws -> [Task] {
         let context = try await contextProvider.context()
         
         let result = try await context.raw(
@@ -114,10 +114,10 @@ public actor DependencyManager {
         return try result.map(to: Task.self)
     }
     
-    public func isTaskBlocked(taskID: UUID) async throws -> Bool {
+    public func isBlocked(taskID: String) async throws -> Bool {
         let context = try await contextProvider.context()
         
-        // Only consider pending or inProgress tasks as active blockers
+        // A task is blocked if there are any active (pending or in-progress) blockers
         let result = try await context.raw(
             """
             MATCH (blocker:Task)-[:Blocks]->(blocked:Task {id: $taskID})
@@ -130,82 +130,134 @@ public actor DependencyManager {
         return try result.mapFirstRequired(to: Bool.self, at: 0)
     }
     
-    public func getDependencyChain(taskID: UUID) async throws -> DependencyChain {
+    // MARK: - Chain Operations
+    
+    public func getFullChain(taskID: String) async throws -> DependencyChain {
         let context = try await contextProvider.context()
         
-        // Get all upstream dependencies with DISTINCT and min depth
+        // Get all upstream dependencies (tasks that block this task, directly or indirectly)
         let upstreamResult = try await context.raw(
             """
-            MATCH path = (blocker:Task)-[:Blocks*]->(blocked:Task {id: $taskID})
-            WITH blocker, min(length(path)) as depth
-            RETURN blocker, depth
-            ORDER BY depth DESC
+            MATCH (t:Task {id: $taskID})
+            OPTIONAL MATCH path = (upstream:Task)-[:Blocks*]->(t)
+            WHERE upstream.id <> $taskID
+            WITH upstream, length(path) as depth
+            WHERE upstream IS NOT NULL
+            RETURN DISTINCT upstream, depth
+            ORDER BY depth ASC, upstream.createdAt ASC
             """,
             bindings: ["taskID": taskID]
         )
         
-        // Map upstream results - Beta 2 handles KuzuNode automatically
-        let upstreamRows = try upstreamResult.mapRows()
-        let decoder = KuzuDecoder()
-        let upstreamData = try upstreamRows.map { row in
-            // The "blocker" column now contains the node properties (Beta 2 feature)
-            let task = try decoder.decode(Task.self, from: row["blocker"] as! [String: Any])
-            let depth = (row["depth"] as? Int64).map(Int.init) ?? 0
-            return TaskWithDepth(task: task, depth: depth)
+        var upstream: [DependencyChainItem] = []
+        for row in try upstreamResult.mapRows() {
+            if let taskData = row["upstream"],
+               let decoder = try? JSONDecoder(),
+               let jsonData = try? JSONSerialization.data(withJSONObject: taskData),
+               let task = try? decoder.decode(Task.self, from: jsonData),
+               let depth = row["depth"] as? Int64 {
+                upstream.append(DependencyChainItem(task: task, depth: Int(depth)))
+            }
         }
         
-        // Get all downstream dependencies with DISTINCT and min depth
+        // Get all downstream dependencies (tasks that this task blocks, directly or indirectly)
         let downstreamResult = try await context.raw(
             """
-            MATCH path = (blocker:Task {id: $taskID})-[:Blocks*]->(blocked:Task)
-            WITH blocked, min(length(path)) as depth
-            RETURN blocked, depth
-            ORDER BY depth ASC
+            MATCH (t:Task {id: $taskID})
+            OPTIONAL MATCH path = (t)-[:Blocks*]->(downstream:Task)
+            WHERE downstream.id <> $taskID
+            WITH downstream, length(path) as depth
+            WHERE downstream IS NOT NULL
+            RETURN DISTINCT downstream, depth
+            ORDER BY depth ASC, downstream.createdAt ASC
             """,
             bindings: ["taskID": taskID]
         )
         
-        // Map downstream results - Beta 2 handles KuzuNode automatically
-        let downstreamRows = try downstreamResult.mapRows()
-        let downstreamData = try downstreamRows.map { row in
-            // The "blocked" column now contains the node properties (Beta 2 feature)
-            let task = try decoder.decode(Task.self, from: row["blocked"] as! [String: Any])
-            let depth = (row["depth"] as? Int64).map(Int.init) ?? 0
-            return TaskWithDepth(task: task, depth: depth)
+        var downstream: [DependencyChainItem] = []
+        for row in try downstreamResult.mapRows() {
+            if let taskData = row["downstream"],
+               let decoder = try? JSONDecoder(),
+               let jsonData = try? JSONSerialization.data(withJSONObject: taskData),
+               let task = try? decoder.decode(Task.self, from: jsonData),
+               let depth = row["depth"] as? Int64 {
+                downstream.append(DependencyChainItem(task: task, depth: Int(depth)))
+            }
         }
         
         return DependencyChain(
             taskID: taskID,
-            upstream: upstreamData,
-            downstream: downstreamData
+            upstream: upstream,
+            downstream: downstream
         )
     }
     
-    // MARK: - Private Helpers (removed - now using KuzuSwiftExtension declarative APIs)
+    // MARK: - Batch Operations
+    
+    public func addMultiple(dependencies: [(blockerID: String, blockedID: String)]) async throws {
+        for (blockerID, blockedID) in dependencies {
+            try await add(blockerID: blockerID, blockedID: blockedID)
+        }
+    }
+    
+    public func removeAll(taskID: String) async throws {
+        let context = try await contextProvider.context()
+        
+        // Remove all dependencies where task is either blocker or blocked
+        _ = try await context.raw(
+            """
+            MATCH (t:Task {id: $taskID})
+            OPTIONAL MATCH (t)-[r:Blocks]->(:Task)
+            DELETE r
+            """,
+            bindings: ["taskID": taskID]
+        )
+        
+        _ = try await context.raw(
+            """
+            MATCH (t:Task {id: $taskID})
+            OPTIONAL MATCH (:Task)-[r:Blocks]->(t)
+            DELETE r
+            """,
+            bindings: ["taskID": taskID]
+        )
+    }
 }
 
 // MARK: - Supporting Types
 
 public struct DependencyChain: Codable, Sendable {
-    public let taskID: UUID
-    public let upstream: [TaskWithDepth]
-    public let downstream: [TaskWithDepth]
+    public let taskID: String
+    public let upstream: [DependencyChainItem]    // Tasks that block this task
+    public let downstream: [DependencyChainItem]  // Tasks that this task blocks
     
-    public var maxUpstreamDepth: Int {
-        upstream.map { $0.depth }.max() ?? 0
-    }
-    
-    public var maxDownstreamDepth: Int {
-        downstream.map { $0.depth }.max() ?? 0
+    public init(taskID: String, upstream: [DependencyChainItem] = [], downstream: [DependencyChainItem] = []) {
+        self.taskID = taskID
+        self.upstream = upstream
+        self.downstream = downstream
     }
 }
 
-public struct TaskWithDepth: Codable, Sendable {
+public struct DependencyChainItem: Codable, Sendable {
     public let task: Task
-    public let depth: Int
+    public let depth: Int  // How many levels away from the main task
     
     public init(task: Task, depth: Int) {
         self.task = task
         self.depth = depth
+    }
+}
+
+public struct TaskFullInfo: Codable, Sendable {
+    public let task: Task
+    public var session: Session?
+    public var parent: Task?
+    public var children: [Task]?
+    public var blockers: [Task]?
+    public var blocking: [Task]?
+    public var fullChain: DependencyChain?
+    
+    public init(task: Task) {
+        self.task = task
     }
 }

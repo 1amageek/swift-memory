@@ -5,7 +5,7 @@ import OpenFoundationModels
 
 @GraphNode
 public struct Session: Codable, Sendable {
-    @ID public var id: UUID = UUID()
+    @ID public var id: String = UUID().uuidString
     public var title: String
     @Timestamp public var startedAt: Date = Date()
     

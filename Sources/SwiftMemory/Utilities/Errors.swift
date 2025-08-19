@@ -19,11 +19,11 @@ public enum MemoryErrorCode: String, Codable {
 // MARK: - Memory Error
 
 public enum MemoryError: LocalizedError {
-    case sessionNotFound(UUID)
-    case taskNotFound(UUID)
+    case sessionNotFound(String)
+    case taskNotFound(String)
     case invalidOrder
-    case circularDependency(blocker: UUID, blocked: UUID)
-    case duplicateParent(taskID: UUID)
+    case circularDependency(blocker: String, blocked: String)
+    case duplicateParent(taskID: String)
     case invalidDifficulty(Int)
     case invalidInput(field: String, reason: String)
     case databaseError(String)
@@ -106,15 +106,15 @@ public enum MemoryError: LocalizedError {
     public var contextInfo: [String: String] {
         switch self {
         case .sessionNotFound(let id):
-            return ["sessionID": id.uuidString]
+            return ["sessionID": id]
         case .taskNotFound(let id):
-            return ["taskID": id.uuidString]
+            return ["taskID": id]
         case .invalidOrder:
             return [:]
         case .circularDependency(let blocker, let blocked):
-            return ["blockerID": blocker.uuidString, "blockedID": blocked.uuidString]
+            return ["blockerID": blocker, "blockedID": blocked]
         case .duplicateParent(let taskID):
-            return ["taskID": taskID.uuidString]
+            return ["taskID": taskID]
         case .invalidDifficulty(let value):
             return ["providedValue": String(value), "validRange": "1-5"]
         case .invalidInput(let field, let reason):

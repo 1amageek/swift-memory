@@ -17,7 +17,7 @@ public struct DependencyGetTool: Tool {
         do {
             switch arguments.type {
             case .chain:
-                let chain = try await DependencyManager.shared.getDependencyChain(taskID: arguments.taskID)
+                let chain = try await DependencyManager.shared.getFullChain(taskID: arguments.taskID)
                 return .dependencyChain(chain)
                 
             case .blockers:
@@ -29,7 +29,7 @@ public struct DependencyGetTool: Tool {
                 return .taskBlocking(taskID: arguments.taskID, blocking: blocking)
                 
             case .isBlocked:
-                let isBlocked = try await DependencyManager.shared.isTaskBlocked(taskID: arguments.taskID)
+                let isBlocked = try await DependencyManager.shared.isBlocked(taskID: arguments.taskID)
                 return .taskBlockedStatus(taskID: arguments.taskID, isBlocked: isBlocked)
             }
         } catch {
@@ -54,7 +54,7 @@ public struct DependencyGetTool: Tool {
 @Generable
 public struct GetDependencyArguments: Sendable {
     @Guide(description: "Task ID to get dependencies for")
-    public let taskID: UUID
+    public let taskID: String
     
     @Guide(description: "Type of dependency query: chain, blockers, blocking, or isBlocked")
     public let type: DependencyQueryType

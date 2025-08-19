@@ -84,8 +84,11 @@ public struct TaskIncludeOptions: Codable, Sendable {
     @Guide(description: "Include child tasks")
     public var children: Bool?
     
-    @Guide(description: "Include dependency information")
-    public var dependencies: Bool?
+    @Guide(description: "Include tasks that block this task")
+    public var blockers: Bool?
+    
+    @Guide(description: "Include tasks blocked by this task")
+    public var blocking: Bool?
     
     @Guide(description: "Include full dependency chain")
     public var fullChain: Bool?
@@ -97,7 +100,7 @@ public struct TaskIncludeOptions: Codable, Sendable {
 extension TaskIncludeOptions {
     /// Check if any options are enabled
     public var hasAnyEnabled: Bool {
-        [parent, children, dependencies, fullChain, session].contains { $0 == true }
+        [parent, children, blockers, blocking, fullChain, session].contains { $0 == true }
     }
     
     /// Convenience initializer for regular Swift usage

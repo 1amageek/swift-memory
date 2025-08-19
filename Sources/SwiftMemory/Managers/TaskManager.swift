@@ -18,12 +18,12 @@ public actor TaskManager {
     // MARK: - CRUD Operations
     
     public func create(
-        sessionID: UUID,
+        sessionID: String,
         title: String,
         description: String? = nil,
         difficulty: Int = 3,
         assignee: String? = nil,
-        parentTaskID: UUID? = nil
+        parentTaskID: String? = nil
     ) async throws -> Task {
         // Validate inputs first (before transaction)
         guard (1...5).contains(difficulty) else {
@@ -125,7 +125,7 @@ public actor TaskManager {
         }
     }
     
-    public func get(id: UUID) async throws -> Task {
+    public func get(id: String) async throws -> Task {
         let context = try await contextProvider.context()
         guard let task = try await context.fetchOne(Task.self, id: id) else {
             throw MemoryError.taskNotFound(id)
@@ -134,10 +134,10 @@ public actor TaskManager {
     }
     
     public func list(
-        sessionID: UUID? = nil,
+        sessionID: String? = nil,
         status: TaskStatus? = nil,
         assignee: String? = nil,
-        parentTaskID: UUID? = nil,
+        parentTaskID: String? = nil,
         readyOnly: Bool = false,
         difficultyMax: Int? = nil
     ) async throws -> [Task] {
@@ -237,14 +237,14 @@ public actor TaskManager {
     }
     
     public func update(
-        id: UUID,
+        id: String,
         title: String? = nil,
         description: String? = nil,
         status: TaskStatus? = nil,
         assignee: String? = nil,
         difficulty: Int? = nil,
         cancelReason: String? = nil,
-        parentTaskID: UUID? = nil
+        parentTaskID: String? = nil
     ) async throws -> Task {
         let context = try await contextProvider.context()
         
@@ -336,7 +336,7 @@ public actor TaskManager {
         return updated
     }
     
-    public func reorder(sessionID: UUID, orderedIds: [UUID]) async throws {
+    public func reorder(sessionID: String, orderedIds: [String]) async throws {
         let context = try await contextProvider.context()
         
         // Verify session exists
@@ -354,17 +354,10 @@ public actor TaskManager {
             bindings: ["sessionID": sessionID, "taskIDs": orderedIds]
         )
         
-        let validIDs: Set<UUID>
+        let validIDs: Set<String>
         if let row = try validationResult.mapFirst() {
             let idArray = row["validIDs"] as? [Any] ?? []
-            validIDs = Set(idArray.compactMap { id in
-                if let uuidString = id as? String {
-                    return UUID(uuidString: uuidString)
-                } else if let uuid = id as? UUID {
-                    return uuid
-                }
-                return nil
-            })
+            validIDs = Set(idArray.compactMap { $0 as? String })
         } else {
             validIDs = []
         }
@@ -401,7 +394,7 @@ public actor TaskManager {
         )
     }
     
-    public func delete(id: UUID, cascade: Bool = false) async throws {
+    public func delete(id: String, cascade: Bool = false) async throws {
         let context = try await contextProvider.context()
         
         // Verify task exists
@@ -410,8 +403,8 @@ public actor TaskManager {
         }
         
         if cascade {
-            // Cascade delete all subtasks with separate queries
-            // First delete all descendants (subtasks) - use 1.. to exclude self
+            // Cascade delete: delete all subtasks first
+            // Use [:SubTaskOf*1..] to match only descendants (depth 1 or more)
             _ = try await context.raw(
                 """
                 MATCH (t:Task {id: $taskID})
@@ -421,65 +414,34 @@ public actor TaskManager {
                 """,
                 bindings: ["taskID": id]
             )
-            
-            // Then delete the task itself
-            _ = try await context.raw(
-                """
-                MATCH (t:Task {id: $taskID})
-                DETACH DELETE t
-                """,
-                bindings: ["taskID": id]
-            )
         } else {
-            // Simple delete - use DETACH DELETE to handle relationships
-            _ = try await context.raw(
+            // Check if task has subtasks
+            let subtaskResult = try await context.raw(
                 """
-                MATCH (t:Task {id: $taskID})
-                DETACH DELETE t
-                RETURN 1 as deleted
+                MATCH (subtask:Task)-[:SubTaskOf]->(parent:Task {id: $taskID})
+                RETURN COUNT(subtask) > 0 AS hasSubtasks
                 """,
                 bindings: ["taskID": id]
             )
+            
+            let hasSubtasks = try subtaskResult.mapFirstRequired(to: Bool.self, at: 0)
+            
+            if hasSubtasks {
+                throw MemoryError.databaseError("Cannot delete task with subtasks. Use cascade option to delete all subtasks.")
+            }
         }
-    }
-    
-    // MARK: - Task Relationships
-    
-    public func getParent(taskID: UUID) async throws -> Task? {
-        let context = try await contextProvider.context()
         
-        // Find parent task
-        let result = try await context.raw(
-            """
-            MATCH (child:Task {id: $taskID})-[:SubTaskOf]->(parent:Task)
-            RETURN parent
-            """,
-            bindings: ["taskID": taskID]
+        // Delete the task using raw query (will also delete all relationships)
+        _ = try await context.raw(
+            "MATCH (t:Task {id: $taskID}) DETACH DELETE t",
+            bindings: ["taskID": id]
         )
-        
-        return try result.mapFirst(to: Task.self)
-    }
-    
-    public func getChildren(taskID: UUID) async throws -> [Task] {
-        let context = try await contextProvider.context()
-        
-        // Find child tasks
-        let result = try await context.raw(
-            """
-            MATCH (child:Task)-[:SubTaskOf]->(parent:Task {id: $taskID})
-            RETURN child
-            ORDER BY child.createdAt ASC
-            """,
-            bindings: ["taskID": taskID]
-        )
-        
-        return try result.map(to: Task.self)
     }
     
     // MARK: - Batch Operations
     
     public func updateBatch(
-        taskIDs: [UUID],
+        taskIDs: [String],
         title: String? = nil,
         description: String? = nil,
         status: TaskStatus? = nil,
@@ -526,72 +488,77 @@ public actor TaskManager {
     
     // MARK: - Enhanced Get with Include Options
     
-    public func getWithIncludes(taskID: UUID, include: TaskIncludeOptions?) async throws -> TaskFullInfo {
+    public func getWithIncludes(taskID: String, include: TaskIncludeOptions?) async throws -> TaskFullInfo {
         let task = try await get(id: taskID)
         
-        // Default: return just the task if no includes specified
-        guard let include = include, include.hasAnyEnabled else {
-            return TaskFullInfo(
-                task: task,
-                parent: nil,
-                children: nil,
-                blockers: nil,
-                blocking: nil,
-                fullChain: nil,
-                session: nil
-            )
+        var fullInfo = TaskFullInfo(task: task)
+        
+        guard let include = include else {
+            return fullInfo
         }
         
-        // Fetch requested information
-        let parent = include.parent == true ? try await getParent(taskID: taskID) : nil
-        let children = include.children == true ? try await getChildren(taskID: taskID) : nil
+        let context = try await contextProvider.context()
         
-        var blockers: [Task]? = nil
-        var blocking: [Task]? = nil
-        if include.dependencies == true {
-            blockers = try await DependencyManager.shared.getBlockers(taskID: taskID)
-            blocking = try await DependencyManager.shared.getBlocking(taskID: taskID)
-        }
-        
-        let fullChain = include.fullChain == true ? 
-            try await DependencyManager.shared.getDependencyChain(taskID: taskID) : nil
-        
-        var session: Session? = nil
+        // Include session if requested
         if include.session == true {
-            let context = try await contextProvider.context()
-            let result = try await context.raw(
+            let sessionResult = try await context.raw(
                 """
                 MATCH (s:Session)-[:HasTask]->(t:Task {id: $taskID})
                 RETURN s
                 """,
                 bindings: ["taskID": taskID]
             )
-            
-            session = try result.mapFirst(to: Session.self)
+            fullInfo.session = try? sessionResult.mapFirst(to: Session.self)
         }
         
-        return TaskFullInfo(
-            task: task,
-            parent: parent,
-            children: children,
-            blockers: blockers,
-            blocking: blocking,
-            fullChain: fullChain,
-            session: session
-        )
+        // Include parent if requested
+        if include.parent == true {
+            let parentResult = try await context.raw(
+                """
+                MATCH (t:Task {id: $taskID})-[:SubTaskOf]->(parent:Task)
+                RETURN parent
+                """,
+                bindings: ["taskID": taskID]
+            )
+            fullInfo.parent = try? parentResult.mapFirst(to: Task.self)
+        }
+        
+        // Include children if requested
+        if include.children == true {
+            let childrenResult = try await context.raw(
+                """
+                MATCH (child:Task)-[:SubTaskOf]->(t:Task {id: $taskID})
+                RETURN child
+                ORDER BY child.createdAt ASC
+                """,
+                bindings: ["taskID": taskID]
+            )
+            fullInfo.children = try? childrenResult.map(to: Task.self)
+        }
+        
+        // Include blockers if requested
+        if include.blockers == true {
+            fullInfo.blockers = try await DependencyManager.shared.getBlockers(taskID: taskID)
+        }
+        
+        // Include blocking if requested
+        if include.blocking == true {
+            let blockingResult = try await context.raw(
+                """
+                MATCH (t:Task {id: $taskID})-[:Blocks]->(blocked:Task)
+                RETURN blocked
+                ORDER BY blocked.createdAt ASC
+                """,
+                bindings: ["taskID": taskID]
+            )
+            fullInfo.blocking = try? blockingResult.map(to: Task.self)
+        }
+        
+        // Include full chain if requested
+        if include.fullChain == true {
+            fullInfo.fullChain = try await DependencyManager.shared.getFullChain(taskID: taskID)
+        }
+        
+        return fullInfo
     }
-    
-    // MARK: - Private Helpers (removed - now using KuzuSwiftExtension declarative APIs)
-}
-
-// MARK: - Supporting Types
-
-public struct TaskFullInfo: Codable, Sendable {
-    public let task: Task
-    public let parent: Task?
-    public let children: [Task]?
-    public let blockers: [Task]?
-    public let blocking: [Task]?
-    public let fullChain: DependencyChain?
-    public let session: Session?
 }

@@ -23,7 +23,7 @@ public actor SessionManager {
         return try await context.save(session)
     }
     
-    public func get(id: UUID) async throws -> Session {
+    public func get(id: String) async throws -> Session {
         let context = try await contextProvider.context()
         guard let session = try await context.fetchOne(Session.self, id: id) else {
             throw MemoryError.sessionNotFound(id)
@@ -62,7 +62,7 @@ public actor SessionManager {
         return try result.map(to: Session.self)
     }
     
-    public func update(id: UUID, title: String) async throws -> Session {
+    public func update(id: String, title: String) async throws -> Session {
         let context = try await contextProvider.context()
         
         guard var session = try await context.fetchOne(Session.self, id: id) else {
@@ -73,7 +73,7 @@ public actor SessionManager {
         return try await context.save(session)
     }
     
-    public func delete(id: UUID, cascade: Bool = false) async throws {
+    public func delete(id: String, cascade: Bool = false) async throws {
         let context = try await contextProvider.context()
         
         // Verify session exists
@@ -102,27 +102,35 @@ public actor SessionManager {
                 """,
                 bindings: ["sessionID": id]
             )
-            
-            // Finally delete the session
-            _ = try await context.raw(
+        } else {
+            // Check if session has tasks
+            let hasTasksResult = try await context.raw(
                 """
-                MATCH (s:Session {id: $sessionID})
-                DETACH DELETE s
+                MATCH (s:Session {id: $sessionID})-[:HasTask]->(t:Task)
+                RETURN COUNT(t) > 0 AS hasTasks
                 """,
                 bindings: ["sessionID": id]
             )
-        } else {
-            // Simple delete
-            try await context.delete(session)
+            
+            let hasTasks = try hasTasksResult.mapFirstRequired(to: Bool.self, at: 0)
+            
+            if hasTasks {
+                throw MemoryError.databaseError("Cannot delete session with tasks. Use cascade option to delete all tasks.")
+            }
         }
+        
+        // Delete the session using raw query
+        _ = try await context.raw(
+            "MATCH (s:Session {id: $sessionID}) DETACH DELETE s",
+            bindings: ["sessionID": id]
+        )
     }
     
-    // MARK: - Session Task Management
+    // MARK: - Helper Methods
     
-    public func getTaskCount(sessionID: UUID) async throws -> Int {
+    public func getTaskCount(sessionID: String) async throws -> Int {
         let context = try await contextProvider.context()
         
-        // Count tasks for session
         let result = try await context.raw(
             """
             MATCH (s:Session {id: $sessionID})-[:HasTask]->(t:Task)
@@ -131,34 +139,68 @@ public actor SessionManager {
             bindings: ["sessionID": sessionID]
         )
         
-        if result.hasNext(),
-           let tuple = try result.getNext(),
-           let dict = try? tuple.getAsDictionary(),
-           let count = dict["count"] as? Int64 {
-            return Int(count)
-        }
-        return 0
+        return try result.mapFirstRequired(to: Int64.self, at: 0).asInt()
     }
     
-    public func getTasks(sessionID: UUID) async throws -> [(task: Task, order: Int)] {
+    public func getStats(sessionID: String) async throws -> SessionStats {
         let context = try await contextProvider.context()
         
-        // Get tasks with their order
-        let result = try await context.raw(
+        // Get session
+        guard let session = try await context.fetchOne(Session.self, id: sessionID) else {
+            throw MemoryError.sessionNotFound(sessionID)
+        }
+        
+        // Get task counts by status
+        let statsResult = try await context.raw(
             """
-            MATCH (s:Session {id: $sessionID})-[r:HasTask]->(t:Task)
-            RETURN t, r.`order` as taskOrder
-            ORDER BY r.`order` ASC
+            MATCH (s:Session {id: $sessionID})-[:HasTask]->(t:Task)
+            RETURN t.status as status, COUNT(t) as count
             """,
             bindings: ["sessionID": sessionID]
         )
         
-        let rows = try result.mapRows()
-        return try rows.map { row in
-            // Beta 2: "t" column now contains node properties automatically
-            let task = try KuzuDecoder().decode(Task.self, from: row["t"] as! [String: Any])
-            let order = (row["taskOrder"] as? Int64).map(Int.init) ?? 0
-            return (task: task, order: order)
+        var pending = 0
+        var inProgress = 0
+        var done = 0
+        var cancelled = 0
+        
+        for row in try statsResult.mapRows() {
+            if let status = row["status"] as? String,
+               let count = row["count"] as? Int64 {
+                switch status {
+                case "pending": pending = Int(count)
+                case "inProgress": inProgress = Int(count)
+                case "done": done = Int(count)
+                case "cancelled": cancelled = Int(count)
+                default: break
+                }
+            }
         }
+        
+        return SessionStats(
+            session: session,
+            totalTasks: pending + inProgress + done + cancelled,
+            pendingTasks: pending,
+            inProgressTasks: inProgress,
+            completedTasks: done,
+            cancelledTasks: cancelled
+        )
+    }
+}
+
+// MARK: - Supporting Types
+
+public struct SessionStats: Sendable {
+    public let session: Session
+    public let totalTasks: Int
+    public let pendingTasks: Int
+    public let inProgressTasks: Int
+    public let completedTasks: Int
+    public let cancelledTasks: Int
+}
+
+extension Int64 {
+    func asInt() -> Int {
+        Int(self)
     }
 }

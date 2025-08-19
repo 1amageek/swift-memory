@@ -55,8 +55,8 @@ public struct SetDependencyArguments: Sendable {
     public let action: DependencyAction
     
     @Guide(description: "Task that blocks another task")
-    public let blockerID: UUID
+    public let blockerID: String
     
     @Guide(description: "Task that is blocked")
-    public let blockedID: UUID
+    public let blockedID: String
 }

@@ -8,7 +8,7 @@ import OpenFoundationModelsMacros
 @Generable
 public struct CreateTaskArguments: Sendable {
     @Guide(description: "The session ID this task belongs to")
-    public let sessionID: UUID
+    public let sessionID: String
     
     @Guide(description: "Task title")
     public let title: String
@@ -23,16 +23,16 @@ public struct CreateTaskArguments: Sendable {
     public let assignee: String?
     
     @Guide(description: "Optional parent task ID for subtasks")
-    public let parentTaskID: UUID?
+    public let parentTaskID: String?
 }
 
 @Generable
 public struct UpdateTaskArguments: Sendable {
     @Guide(description: "Single task ID for backward compatibility")
-    public let taskID: UUID?
+    public let taskID: String?
     
     @Guide(description: "Multiple task IDs for batch update")
-    public let taskIDs: [UUID]?
+    public let taskIDs: [String]?
     
     @Guide(description: "Updates to apply to the task(s)")
     public let update: TaskUpdate
@@ -62,7 +62,7 @@ public struct TaskUpdate: Codable, Sendable {
 @Generable
 public struct GetTaskArguments: Sendable {
     @Guide(description: "The task ID to retrieve")
-    public let taskID: UUID
+    public let taskID: String
     
     @Guide(description: "Optional data to include in response")
     public let include: TaskIncludeOptions?
@@ -71,7 +71,7 @@ public struct GetTaskArguments: Sendable {
 @Generable
 public struct DeleteTaskArguments: Sendable {
     @Guide(description: "The task ID to delete")
-    public let taskID: UUID
+    public let taskID: String
     
     @Guide(description: "Whether to cascade delete subtasks")
     public let cascade: Bool?
@@ -80,7 +80,7 @@ public struct DeleteTaskArguments: Sendable {
 @Generable
 public struct ListTasksArguments: Sendable {
     @Guide(description: "Filter by session ID")
-    public let sessionID: UUID?
+    public let sessionID: String?
     
     @Guide(description: "Filter by task status")
     public let status: TaskStatus?
@@ -89,7 +89,7 @@ public struct ListTasksArguments: Sendable {
     public let assignee: String?
     
     @Guide(description: "Filter by parent task ID")
-    public let parentTaskID: UUID?
+    public let parentTaskID: String?
     
     @Guide(description: "Only show tasks ready to start")
     public let readyOnly: Bool?
@@ -101,10 +101,10 @@ public struct ListTasksArguments: Sendable {
 @Generable
 public struct ReorderTasksArguments: Sendable {
     @Guide(description: "The session ID containing the tasks")
-    public let sessionID: UUID
+    public let sessionID: String
     
     @Guide(description: "Task IDs in the desired order")
-    public let orderedIDs: [UUID]
+    public let orderedIDs: [String]
 }
 
 // MARK: - Session Tool Arguments
@@ -118,7 +118,7 @@ public struct CreateSessionArguments: Sendable {
 @Generable
 public struct UpdateSessionArguments: Sendable {
     @Guide(description: "The session ID to update")
-    public let sessionID: UUID
+    public let sessionID: String
     
     @Guide(description: "New session title")
     public let title: String
@@ -127,13 +127,13 @@ public struct UpdateSessionArguments: Sendable {
 @Generable
 public struct GetSessionArguments: Sendable {
     @Guide(description: "The session ID to retrieve")
-    public let sessionID: UUID
+    public let sessionID: String
 }
 
 @Generable
 public struct DeleteSessionArguments: Sendable {
     @Guide(description: "The session ID to delete")
-    public let sessionID: UUID
+    public let sessionID: String
     
     @Guide(description: "Whether to cascade delete all tasks")
     public let cascade: Bool?

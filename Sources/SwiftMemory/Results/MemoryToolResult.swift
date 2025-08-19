@@ -7,7 +7,7 @@ public enum MemoryToolResult: Codable, Sendable {
     case sessionRetrieved(Session)
     case sessionList([Session])
     case sessionUpdated(Session)
-    case sessionDeleted(UUID)
+    case sessionDeleted(String)
     
     // Task results
     case taskCreated(Task)
@@ -15,17 +15,17 @@ public enum MemoryToolResult: Codable, Sendable {
     case taskList([Task])
     case taskUpdated(Task)
     case taskBatchUpdated([Task])
-    case taskDeleted(UUID)
-    case taskReordered(sessionID: UUID, orderedIds: [UUID])
+    case taskDeleted(String)
+    case taskReordered(sessionID: String, orderedIds: [String])
     case taskFullInfo(TaskFullInfo)
     
     // Dependency results
-    case dependencyAdded(blockerID: UUID, blockedID: UUID)
-    case dependencyRemoved(blockerID: UUID, blockedID: UUID)
+    case dependencyAdded(blockerID: String, blockedID: String)
+    case dependencyRemoved(blockerID: String, blockedID: String)
     case dependencyChain(DependencyChain)
-    case taskBlockedStatus(taskID: UUID, isBlocked: Bool)
-    case taskBlockers(taskID: UUID, blockers: [Task])
-    case taskBlocking(taskID: UUID, blocking: [Task])
+    case taskBlockedStatus(taskID: String, isBlocked: Bool)
+    case taskBlockers(taskID: String, blockers: [Task])
+    case taskBlocking(taskID: String, blocking: [Task])
     
     // Error result
     case error(String)

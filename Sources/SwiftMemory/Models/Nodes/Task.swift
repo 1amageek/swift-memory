@@ -5,7 +5,7 @@ import OpenFoundationModels
 
 @GraphNode
 public struct Task: Codable, Sendable {
-    @ID public var id: UUID = UUID()
+    @ID public var id: String = UUID().uuidString
     public var title: String
     public var description: String?
     public var status: TaskStatus = .pending
@@ -16,7 +16,7 @@ public struct Task: Codable, Sendable {
     @Timestamp public var updatedAt: Date = Date()
     
     public init(
-        id: UUID = UUID(),
+        id: String = UUID().uuidString,
         title: String,
         description: String? = nil,
         status: TaskStatus = .pending,
