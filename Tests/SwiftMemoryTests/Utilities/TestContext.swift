@@ -83,7 +83,7 @@ public final class TestContext: @unchecked Sendable {
         description: String? = nil,
         difficulty: Int = 3,
         assignee: String? = nil,
-        parentTaskID: UUID? = nil
+        parentTaskID: String? = nil
     ) async throws -> Task {
         try ensureInitialized()
         return try await taskManager.create(

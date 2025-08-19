@@ -30,7 +30,7 @@ public enum TestHelpers {
         description: String? = nil,
         difficulty: Int = 3,
         assignee: String? = nil,
-        parentTaskID: UUID? = nil
+        parentTaskID: String? = nil
     ) async throws -> Task {
         return try await taskManager.create(
             sessionID: session.id,
@@ -49,7 +49,7 @@ public enum TestHelpers {
         description: String? = nil,
         difficulty: Int = 3,
         assignee: String? = nil,
-        parentTaskID: UUID? = nil
+        parentTaskID: String? = nil
     ) async throws -> Task {
         return try await TaskManager.shared.create(
             sessionID: session.id,
@@ -259,7 +259,7 @@ public enum TestHelpers {
     /// Assert that a task array contains a specific task
     public static func assertContainsTask(
         _ tasks: [Task],
-        withID taskID: UUID
+        withID taskID: String
     ) {
         #expect(
             tasks.contains { $0.id == taskID },
@@ -270,7 +270,7 @@ public enum TestHelpers {
     /// Assert that a task array does not contain a specific task
     public static func assertDoesNotContainTask(
         _ tasks: [Task],
-        withID taskID: UUID
+        withID taskID: String
     ) {
         #expect(
             !tasks.contains { $0.id == taskID },
@@ -312,7 +312,7 @@ public struct TaskBuilder {
     public var difficulty = 3
     public var status = TaskStatus.pending
     public var assignee: String? = nil
-    public var parentTaskID: UUID? = nil
+    public var parentTaskID: String? = nil
     
     public init() {}
     
@@ -346,7 +346,7 @@ public struct TaskBuilder {
         return builder
     }
     
-    public func with(parentTaskID: UUID) -> TaskBuilder {
+    public func with(parentTaskID: String) -> TaskBuilder {
         var builder = self
         builder.parentTaskID = parentTaskID
         return builder

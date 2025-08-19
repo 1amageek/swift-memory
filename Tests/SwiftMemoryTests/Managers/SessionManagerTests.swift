@@ -77,7 +77,7 @@ struct SessionManagerTests {
         let context = try await TestContext.create(testName: #function)
         defer { _Concurrency.Task { await context.cleanup() } }
         
-        let fakeID = UUID()
+        let fakeID = UUID().uuidString
         
         do {
             _ = try await context.sessionManager.get(id: fakeID)
@@ -232,7 +232,7 @@ struct SessionManagerTests {
         let context = try await TestContext.create(testName: #function)
         defer { _Concurrency.Task { await context.cleanup() } }
         
-        let fakeID = UUID()
+        let fakeID = UUID().uuidString
         
         await context.helpers.expectMemoryError(
             .sessionNotFound(fakeID)
@@ -297,7 +297,7 @@ struct SessionManagerTests {
         let context = try await TestContext.create(testName: #function)
         defer { _Concurrency.Task { await context.cleanup() } }
         
-        let fakeID = UUID()
+        let fakeID = UUID().uuidString
         
         await context.helpers.expectMemoryError(.sessionNotFound(fakeID)) {
             try await context.sessionManager.delete(id: fakeID, cascade: false)

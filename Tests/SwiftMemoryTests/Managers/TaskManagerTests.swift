@@ -79,7 +79,7 @@ struct TaskManagerTests {
         let context = try await TestContext.create(testName: #function)
         defer { _Concurrency.Task { await context.cleanup() } }
         
-        let fakeSessionID = UUID()
+        let fakeSessionID = UUID().uuidString
         
         await context.helpers.expectMemoryError(.sessionNotFound(fakeSessionID)) {
             try await context.taskManager.create(
@@ -95,7 +95,7 @@ struct TaskManagerTests {
         defer { _Concurrency.Task { await context.cleanup() } }
         
         let session = try await context.helpers.createSampleSession()
-        let fakeParentID = UUID()
+        let fakeParentID = UUID().uuidString
         
         await context.helpers.expectMemoryError(.taskNotFound(fakeParentID)) {
             try await context.taskManager.create(
@@ -248,7 +248,7 @@ struct TaskManagerTests {
         let context = try await TestContext.create(testName: #function)
         defer { _Concurrency.Task { await context.cleanup() } }
         
-        let fakeID = UUID()
+        let fakeID = UUID().uuidString
         
         await context.helpers.expectMemoryError(.taskNotFound(fakeID)) {
             try await context.taskManager.get(id: fakeID)
@@ -513,7 +513,7 @@ struct TaskManagerTests {
         let context = try await TestContext.create(testName: #function)
         defer { _Concurrency.Task { await context.cleanup() } }
         
-        let fakeID = UUID()
+        let fakeID = UUID().uuidString
         
         await context.helpers.expectMemoryError(.taskNotFound(fakeID)) {
             try await context.taskManager.update(
@@ -565,7 +565,7 @@ struct TaskManagerTests {
         
         let session = try await context.helpers.createSampleSession()
         let task = try await context.helpers.createSampleTask(in: session)
-        let fakeID = UUID()
+        let fakeID = UUID().uuidString
         
         do {
             try await context.taskManager.reorder(
@@ -664,7 +664,7 @@ struct TaskManagerTests {
         let context = try await TestContext.create(testName: #function)
         defer { _Concurrency.Task { await context.cleanup() } }
         
-        let fakeID = UUID()
+        let fakeID = UUID().uuidString
         
         await context.helpers.expectMemoryError(.taskNotFound(fakeID)) {
             try await context.taskManager.delete(id: fakeID, cascade: false)

@@ -8,11 +8,11 @@ struct ErrorMappingTests {
     @Test("MemoryError should provide error codes")
     func testErrorCodes() {
         let errors: [(MemoryError, MemoryErrorCode)] = [
-            (.sessionNotFound(UUID()), .sessionNotFound),
-            (.taskNotFound(UUID()), .taskNotFound),
+            (.sessionNotFound(UUID().uuidString), .sessionNotFound),
+            (.taskNotFound(UUID().uuidString), .taskNotFound),
             (.invalidOrder, .invalidOrder),
-            (.circularDependency(blocker: UUID(), blocked: UUID()), .circularDependency),
-            (.duplicateParent(taskID: UUID()), .duplicateParent),
+            (.circularDependency(blocker: UUID().uuidString, blocked: UUID().uuidString), .circularDependency),
+            (.duplicateParent(taskID: UUID().uuidString), .duplicateParent),
             (.invalidDifficulty(10), .invalidDifficulty),
             (.invalidInput(field: "test", reason: "invalid"), .invalidInput),
             (.databaseError("test error"), .databaseError)
@@ -26,11 +26,11 @@ struct ErrorMappingTests {
     @Test("MemoryError should provide recovery suggestions")
     func testRecoverySuggestions() {
         // Check that recovery suggestions exist, but don't depend on exact text
-        let sessionError = MemoryError.sessionNotFound(UUID())
+        let sessionError = MemoryError.sessionNotFound(UUID().uuidString)
         #expect(sessionError.recoverySuggestion != nil)
         #expect(!sessionError.recoverySuggestion!.isEmpty)
         
-        let taskError = MemoryError.taskNotFound(UUID())
+        let taskError = MemoryError.taskNotFound(UUID().uuidString)
         #expect(taskError.recoverySuggestion != nil)
         #expect(!taskError.recoverySuggestion!.isEmpty)
         
@@ -38,26 +38,26 @@ struct ErrorMappingTests {
         #expect(difficultyError.recoverySuggestion != nil)
         #expect(!difficultyError.recoverySuggestion!.isEmpty)
         
-        let circularError = MemoryError.circularDependency(blocker: UUID(), blocked: UUID())
+        let circularError = MemoryError.circularDependency(blocker: UUID().uuidString, blocked: UUID().uuidString)
         #expect(circularError.recoverySuggestion != nil)
         #expect(!circularError.recoverySuggestion!.isEmpty)
     }
     
     @Test("MemoryError should provide context information")
     func testContextInfo() {
-        let sessionID = UUID()
+        let sessionID = UUID().uuidString
         let sessionError = MemoryError.sessionNotFound(sessionID)
-        #expect(sessionError.contextInfo["sessionID"] == sessionID.uuidString)
+        #expect(sessionError.contextInfo["sessionID"] == sessionID)
         
-        let taskID = UUID()
+        let taskID = UUID().uuidString
         let taskError = MemoryError.taskNotFound(taskID)
-        #expect(taskError.contextInfo["taskID"] == taskID.uuidString)
+        #expect(taskError.contextInfo["taskID"] == taskID)
         
-        let blockerID = UUID()
-        let blockedID = UUID()
+        let blockerID = UUID().uuidString
+        let blockedID = UUID().uuidString
         let circularError = MemoryError.circularDependency(blocker: blockerID, blocked: blockedID)
-        #expect(circularError.contextInfo["blockerID"] == blockerID.uuidString)
-        #expect(circularError.contextInfo["blockedID"] == blockedID.uuidString)
+        #expect(circularError.contextInfo["blockerID"] == blockerID)
+        #expect(circularError.contextInfo["blockedID"] == blockedID)
         
         let difficultyError = MemoryError.invalidDifficulty(10)
         #expect(difficultyError.contextInfo["providedValue"] == "10")
@@ -66,14 +66,14 @@ struct ErrorMappingTests {
     
     @Test("ErrorMapping should format errors with suggestions")
     func testErrorMappingWithSuggestions() {
-        let sessionError = MemoryError.sessionNotFound(UUID())
+        let sessionError = MemoryError.sessionNotFound(UUID().uuidString)
         let mapped = ErrorMapping.map(sessionError)
         
         // Check that error message exists without depending on exact text
         #expect(!mapped.isEmpty)
         #expect(mapped.count > 10) // Has meaningful content
         
-        let taskError = MemoryError.taskNotFound(UUID())
+        let taskError = MemoryError.taskNotFound(UUID().uuidString)
         let mappedTask = ErrorMapping.map(taskError)
         
         // Check that error message exists without depending on exact text
@@ -95,7 +95,7 @@ struct ErrorMappingTests {
     
     @Test("StructuredMemoryError should contain all fields")
     func testStructuredError() {
-        let taskID = UUID()
+        let taskID = UUID().uuidString
         let error = MemoryError.taskNotFound(taskID)
         let structured = error.structuredError
         
@@ -103,17 +103,17 @@ struct ErrorMappingTests {
         #expect(!structured.message.isEmpty) // Message exists but don't depend on exact text
         #expect(structured.suggestion != nil)
         #expect(!structured.suggestion!.isEmpty) // Suggestion exists
-        #expect(structured.context["taskID"] == taskID.uuidString)
+        #expect(structured.context["taskID"] == taskID)
     }
     
     @Test("Error descriptions should be informative")
     func testErrorDescriptions() {
         let errors: [MemoryError] = [
-            .sessionNotFound(UUID()),
-            .taskNotFound(UUID()),
+            .sessionNotFound(UUID().uuidString),
+            .taskNotFound(UUID().uuidString),
             .invalidOrder,
-            .circularDependency(blocker: UUID(), blocked: UUID()),
-            .duplicateParent(taskID: UUID()),
+            .circularDependency(blocker: UUID().uuidString, blocked: UUID().uuidString),
+            .duplicateParent(taskID: UUID().uuidString),
             .invalidDifficulty(10),
             .invalidInput(field: "title", reason: "empty"),
             .databaseError("connection failed")

@@ -6,7 +6,7 @@ public protocol SessionRepository: Sendable {
     func create(_ session: Session) async throws -> Session
     
     /// Find a session by ID
-    func find(id: UUID) async throws -> Session?
+    func find(id: String) async throws -> Session?
     
     /// Find all sessions with optional filtering
     func findAll(filter: SessionFilter?) async throws -> [Session]
@@ -15,13 +15,13 @@ public protocol SessionRepository: Sendable {
     func update(_ session: Session) async throws -> Session
     
     /// Delete a session by ID
-    func delete(id: UUID, cascade: Bool) async throws
+    func delete(id: String, cascade: Bool) async throws
     
     /// Get all tasks in a session with their order
-    func getTasks(sessionID: UUID) async throws -> [TaskWithOrder]
+    func getTasks(sessionID: String) async throws -> [TaskWithOrder]
     
     /// Get the count of tasks in a session
-    func getTaskCount(sessionID: UUID) async throws -> Int
+    func getTaskCount(sessionID: String) async throws -> Int
 }
 
 /// Filter options for session queries

@@ -77,7 +77,7 @@ public actor SessionManager {
         let context = try await contextProvider.context()
         
         // Verify session exists
-        guard let session = try await context.fetchOne(Session.self, id: id) else {
+        guard try await context.fetchOne(Session.self, id: id) != nil else {
             throw MemoryError.sessionNotFound(id)
         }
         

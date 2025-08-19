@@ -14,7 +14,7 @@ public actor KuzuSessionRepository: SessionRepository {
         return try await context.save(session)
     }
     
-    public func find(id: UUID) async throws -> Session? {
+    public func find(id: String) async throws -> Session? {
         return try await context.fetchOne(Session.self, id: id)
     }
     
@@ -54,7 +54,7 @@ public actor KuzuSessionRepository: SessionRepository {
         return try await context.save(session)
     }
     
-    public func delete(id: UUID, cascade: Bool) async throws {
+    public func delete(id: String, cascade: Bool) async throws {
         if cascade {
             // Use transaction for cascade delete
             try await context.withTransaction { tx in
@@ -99,7 +99,7 @@ public actor KuzuSessionRepository: SessionRepository {
         }
     }
     
-    public func getTasks(sessionID: UUID) async throws -> [TaskWithOrder] {
+    public func getTasks(sessionID: String) async throws -> [TaskWithOrder] {
         let result = try await context.raw(
             """
             MATCH (s:Session {id: $sessionID})-[r:HasTask]->(t:Task)
@@ -121,7 +121,7 @@ public actor KuzuSessionRepository: SessionRepository {
         }
     }
     
-    public func getTaskCount(sessionID: UUID) async throws -> Int {
+    public func getTaskCount(sessionID: String) async throws -> Int {
         let result = try await context.raw(
             """
             MATCH (s:Session {id: $sessionID})-[:HasTask]->(t:Task)

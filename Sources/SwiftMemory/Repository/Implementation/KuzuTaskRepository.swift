@@ -10,7 +10,7 @@ public actor KuzuTaskRepository: TaskRepository {
         self.context = context
     }
     
-    public func create(_ task: Task, sessionID: UUID, parentTaskID: UUID?) async throws -> Task {
+    public func create(_ task: Task, sessionID: String, parentTaskID: String?) async throws -> Task {
         // Save the task node first
         let savedTask = try await context.save(task)
         
@@ -91,7 +91,7 @@ public actor KuzuTaskRepository: TaskRepository {
         }
     }
     
-    public func find(id: UUID) async throws -> Task? {
+    public func find(id: String) async throws -> Task? {
         return try await context.fetchOne(Task.self, id: id)
     }
     
@@ -109,7 +109,7 @@ public actor KuzuTaskRepository: TaskRepository {
         }
     }
     
-    private func findTasksInSession(sessionID: UUID, filter: TaskFilter) async throws -> [Task] {
+    private func findTasksInSession(sessionID: String, filter: TaskFilter) async throws -> [Task] {
         var query = "MATCH (s:Session {id: $sessionID})-[r:HasTask]->(t:Task)"
         var bindings: [String: any Sendable] = ["sessionID": sessionID]
         var conditions: [String] = []
@@ -153,7 +153,7 @@ public actor KuzuTaskRepository: TaskRepository {
         return try result.map(to: Task.self)
     }
     
-    private func findSubtasks(parentID: UUID) async throws -> [Task] {
+    private func findSubtasks(parentID: String) async throws -> [Task] {
         let result = try await context.raw(
             """
             MATCH (t:Task)-[:SubTaskOf]->(parent:Task {id: $parentID})
@@ -228,7 +228,7 @@ public actor KuzuTaskRepository: TaskRepository {
         return try await context.save(task)
     }
     
-    public func delete(id: UUID, cascade: Bool) async throws {
+    public func delete(id: String, cascade: Bool) async throws {
         if cascade {
             // Cascade delete all subtasks
             _ = try await context.raw(
@@ -261,7 +261,7 @@ public actor KuzuTaskRepository: TaskRepository {
         }
     }
     
-    public func setParent(taskID: UUID, parentID: UUID?) async throws {
+    public func setParent(taskID: String, parentID: String?) async throws {
         if let parentID = parentID {
             // Check for self-loop
             guard parentID != taskID else {
@@ -316,7 +316,7 @@ public actor KuzuTaskRepository: TaskRepository {
         }
     }
     
-    public func getParent(taskID: UUID) async throws -> Task? {
+    public func getParent(taskID: String) async throws -> Task? {
         let result = try await context.raw(
             """
             MATCH (child:Task {id: $taskID})-[:SubTaskOf]->(parent:Task)
@@ -328,7 +328,7 @@ public actor KuzuTaskRepository: TaskRepository {
         return try result.mapFirst(to: Task.self)
     }
     
-    public func getChildren(taskID: UUID) async throws -> [Task] {
+    public func getChildren(taskID: String) async throws -> [Task] {
         let result = try await context.raw(
             """
             MATCH (child:Task)-[:SubTaskOf]->(parent:Task {id: $taskID})
@@ -341,7 +341,7 @@ public actor KuzuTaskRepository: TaskRepository {
         return try result.map(to: Task.self)
     }
     
-    public func reorder(sessionID: UUID, orderedTaskIDs: [UUID]) async throws {
+    public func reorder(sessionID: String, orderedTaskIDs: [String]) async throws {
         // Validate all tasks exist in the session using UNWIND
         let validationResult = try await context.raw(
             """
@@ -352,17 +352,10 @@ public actor KuzuTaskRepository: TaskRepository {
             bindings: ["sessionID": sessionID, "taskIDs": orderedTaskIDs]
         )
         
-        let validIDs: Set<UUID>
+        let validIDs: Set<String>
         if let row = try validationResult.mapFirst() {
             let idArray = row["validIDs"] as? [Any] ?? []
-            validIDs = Set(idArray.compactMap { id in
-                if let uuidString = id as? String {
-                    return UUID(uuidString: uuidString)
-                } else if let uuid = id as? UUID {
-                    return uuid
-                }
-                return nil
-            })
+            validIDs = Set(idArray.compactMap { $0 as? String })
         } else {
             validIDs = []
         }
@@ -398,7 +391,7 @@ public actor KuzuTaskRepository: TaskRepository {
         )
     }
     
-    public func batchUpdate(taskIDs: [UUID], updates: TaskUpdateData) async throws -> [Task] {
+    public func batchUpdate(taskIDs: [String], updates: TaskUpdateData) async throws -> [Task] {
         var updatedTasks: [Task] = []
         
         // Validate difficulty once if provided

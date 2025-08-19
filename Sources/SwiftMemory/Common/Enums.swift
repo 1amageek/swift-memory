@@ -109,6 +109,8 @@ extension TaskIncludeOptions {
         parent: Bool? = nil,
         children: Bool? = nil,
         dependencies: Bool? = nil,
+        blockers: Bool? = nil,
+        blocking: Bool? = nil,
         fullChain: Bool? = nil,
         session: Bool? = nil
     ) -> TaskIncludeOptions {
@@ -116,7 +118,13 @@ extension TaskIncludeOptions {
         var json: [String: Any] = [:]
         if let parent = parent { json["parent"] = parent }
         if let children = children { json["children"] = children }
-        if let dependencies = dependencies { json["dependencies"] = dependencies }
+        // Handle 'dependencies' for backward compatibility - sets both blockers and blocking
+        if let dependencies = dependencies {
+            json["blockers"] = dependencies
+            json["blocking"] = dependencies
+        }
+        if let blockers = blockers { json["blockers"] = blockers }
+        if let blocking = blocking { json["blocking"] = blocking }
         if let fullChain = fullChain { json["fullChain"] = fullChain }
         if let session = session { json["session"] = session }
         

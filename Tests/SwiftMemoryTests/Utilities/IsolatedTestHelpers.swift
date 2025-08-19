@@ -29,7 +29,7 @@ public struct IsolatedTestHelpers {
         description: String? = nil,
         difficulty: Int = 3,
         assignee: String? = nil,
-        parentTaskID: UUID? = nil
+        parentTaskID: String? = nil
     ) async throws -> Task {
         return try await context.createTask(
             in: session,
@@ -86,7 +86,7 @@ public struct IsolatedTestHelpers {
     /// Assert that a task array contains a specific task
     public func assertContainsTask(
         _ tasks: [Task],
-        withID taskID: UUID
+        withID taskID: String
     ) {
         #expect(
             tasks.contains { $0.id == taskID },
@@ -97,7 +97,7 @@ public struct IsolatedTestHelpers {
     /// Assert that a task array does not contain a specific task
     public func assertDoesNotContainTask(
         _ tasks: [Task],
-        withID taskID: UUID
+        withID taskID: String
     ) {
         #expect(
             !tasks.contains { $0.id == taskID },
@@ -145,7 +145,7 @@ public struct IsolatedTaskBuilder {
     public var difficulty = 3
     public var status = TaskStatus.pending
     public var assignee: String? = nil
-    public var parentTaskID: UUID? = nil
+    public var parentTaskID: String? = nil
     
     private let context: TestContext
     
@@ -183,7 +183,7 @@ public struct IsolatedTaskBuilder {
         return builder
     }
     
-    public func with(parentTaskID: UUID) -> IsolatedTaskBuilder {
+    public func with(parentTaskID: String) -> IsolatedTaskBuilder {
         var builder = self
         builder.parentTaskID = parentTaskID
         return builder

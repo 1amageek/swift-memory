@@ -163,7 +163,9 @@ struct EnumsTests {
         
         #expect(decoded.parent == true)
         #expect(decoded.children == false)
-        #expect(decoded.dependencies == true)
+        // Note: 'dependencies' parameter in create() sets both blockers and blocking
+        #expect(decoded.blockers == true)
+        #expect(decoded.blocking == true)
         #expect(decoded.fullChain == nil)
         #expect(decoded.session == true)
     }

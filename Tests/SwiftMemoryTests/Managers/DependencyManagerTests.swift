@@ -153,7 +153,7 @@ struct DependencyManagerTests {
         
         let session = try await context.helpers.createSampleSession()
         let task = try await context.helpers.createSampleTask(in: session)
-        let fakeID = UUID()
+        let fakeID = UUID().uuidString
         
         await context.helpers.expectMemoryError(.taskNotFound(fakeID)) {
             try await context.dependencyManager.add(
@@ -170,7 +170,7 @@ struct DependencyManagerTests {
         
         let session = try await context.helpers.createSampleSession()
         let task = try await context.helpers.createSampleTask(in: session)
-        let fakeID = UUID()
+        let fakeID = UUID().uuidString
         
         await context.helpers.expectMemoryError(.taskNotFound(fakeID)) {
             try await context.dependencyManager.add(
@@ -380,7 +380,7 @@ struct DependencyManagerTests {
         let context = try await TestContext.create(testName: #function)
         defer { _Concurrency.Task { await context.cleanup() } }
         
-        let fakeID = UUID()
+        let fakeID = UUID().uuidString
         
         // getBlockers should return empty array for non-existent task
         let blockers = try await context.dependencyManager.getBlockers(taskID: fakeID)

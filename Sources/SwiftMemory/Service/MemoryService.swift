@@ -44,7 +44,7 @@ public actor MemoryService {
         return try await sessionRepo.create(session)
     }
     
-    public func getSession(id: UUID) async throws -> Session {
+    public func getSession(id: String) async throws -> Session {
         guard let session = try await sessionRepo.find(id: id) else {
             throw MemoryError.sessionNotFound(id)
         }
@@ -55,7 +55,7 @@ public actor MemoryService {
         return try await sessionRepo.findAll(filter: filter)
     }
     
-    public func updateSession(id: UUID, title: String) async throws -> Session {
+    public func updateSession(id: String, title: String) async throws -> Session {
         guard var session = try await sessionRepo.find(id: id) else {
             throw MemoryError.sessionNotFound(id)
         }
@@ -63,19 +63,19 @@ public actor MemoryService {
         return try await sessionRepo.update(session)
     }
     
-    public func deleteSession(id: UUID, cascade: Bool = false) async throws {
+    public func deleteSession(id: String, cascade: Bool = false) async throws {
         try await sessionRepo.delete(id: id, cascade: cascade)
     }
     
     // MARK: - Task Operations
     
     public func createTask(
-        sessionID: UUID,
+        sessionID: String,
         title: String,
         description: String? = nil,
         difficulty: Int = 3,
         assignee: String? = nil,
-        parentTaskID: UUID? = nil
+        parentTaskID: String? = nil
     ) async throws -> Task {
         // Validate difficulty
         guard (1...5).contains(difficulty) else {
@@ -97,7 +97,7 @@ public actor MemoryService {
         return try await taskRepo.create(task, sessionID: sessionID, parentTaskID: parentTaskID)
     }
     
-    public func getTask(id: UUID) async throws -> Task {
+    public func getTask(id: String) async throws -> Task {
         guard let task = try await taskRepo.find(id: id) else {
             throw MemoryError.taskNotFound(id)
         }
@@ -109,14 +109,14 @@ public actor MemoryService {
     }
     
     public func updateTask(
-        id: UUID,
+        id: String,
         title: String? = nil,
         description: String? = nil,
         status: TaskStatus? = nil,
         assignee: String? = nil,
         difficulty: Int? = nil,
         cancelReason: String? = nil,
-        parentTaskID: UUID? = nil
+        parentTaskID: String? = nil
     ) async throws -> Task {
         guard var task = try await taskRepo.find(id: id) else {
             throw MemoryError.taskNotFound(id)
@@ -148,11 +148,11 @@ public actor MemoryService {
         return updated
     }
     
-    public func deleteTask(id: UUID, cascade: Bool = false) async throws {
+    public func deleteTask(id: String, cascade: Bool = false) async throws {
         try await taskRepo.delete(id: id, cascade: cascade)
     }
     
-    public func reorderTasks(sessionID: UUID, orderedTaskIDs: [UUID]) async throws {
+    public func reorderTasks(sessionID: String, orderedTaskIDs: [String]) async throws {
         try await taskRepo.reorder(sessionID: sessionID, orderedTaskIDs: orderedTaskIDs)
     }
     
@@ -160,13 +160,13 @@ public actor MemoryService {
     
     /// Create a task with dependencies in a single transaction
     public func createTaskWithDependencies(
-        sessionID: UUID,
+        sessionID: String,
         title: String,
         description: String? = nil,
         difficulty: Int = 3,
         assignee: String? = nil,
-        parentTaskID: UUID? = nil,
-        blockerIDs: [UUID] = []
+        parentTaskID: String? = nil,
+        blockerIDs: [String] = []
     ) async throws -> Task {
         // Create the task first
         let task = try await self.createTask(
@@ -188,7 +188,7 @@ public actor MemoryService {
     
     /// Get ready tasks in a session (not blocked by active tasks)
     public func getReadyTasks(
-        sessionID: UUID,
+        sessionID: String,
         assignee: String? = nil,
         difficultyMax: Int? = nil
     ) async throws -> [Task] {
@@ -203,19 +203,19 @@ public actor MemoryService {
     }
     
     /// Get task with full information including dependencies and hierarchy
-    public func getTaskWithFullInfo(taskID: UUID, include: TaskIncludeOptions?) async throws -> TaskFullInfo {
+    public func getTaskWithFullInfo(taskID: String, include: TaskIncludeOptions?) async throws -> TaskFullInfo {
         let task = try await getTask(id: taskID)
         
         // Default: return just the task if no includes specified
         guard let include = include, include.hasAnyEnabled else {
             return TaskFullInfo(
                 task: task,
+                session: nil,
                 parent: nil,
                 children: nil,
                 blockers: nil,
                 blocking: nil,
-                fullChain: nil,
-                session: nil
+                fullChain: nil
             )
         }
         
@@ -225,9 +225,9 @@ public actor MemoryService {
         
         var blockers: [Task]? = nil
         var blocking: [Task]? = nil
-        if include.dependencies == true {
-            blockers = try await dependencyRepo.getBlockers(taskID: taskID)
-            blocking = try await dependencyRepo.getBlocking(taskID: taskID)
+        if include.blockers == true || include.blocking == true {
+            blockers = include.blockers == true ? try await dependencyRepo.getBlockers(taskID: taskID) : nil
+            blocking = include.blocking == true ? try await dependencyRepo.getBlocking(taskID: taskID) : nil
         }
         
         let fullChain = include.fullChain == true ?
@@ -248,18 +248,18 @@ public actor MemoryService {
         
         return TaskFullInfo(
             task: task,
+            session: session,
             parent: parent,
             children: children,
             blockers: blockers,
             blocking: blocking,
-            fullChain: fullChain,
-            session: session
+            fullChain: fullChain
         )
     }
     
     /// Batch update multiple tasks
     public func batchUpdateTasks(
-        taskIDs: [UUID],
+        taskIDs: [String],
         updates: TaskUpdateData
     ) async throws -> [Task] {
         return try await taskRepo.batchUpdate(taskIDs: taskIDs, updates: updates)
@@ -267,37 +267,37 @@ public actor MemoryService {
     
     // MARK: - Dependency Operations
     
-    public func addDependency(blockerID: UUID, blockedID: UUID) async throws {
+    public func addDependency(blockerID: String, blockedID: String) async throws {
         try await dependencyRepo.add(blockerID: blockerID, blockedID: blockedID)
     }
     
-    public func removeDependency(blockerID: UUID, blockedID: UUID) async throws {
+    public func removeDependency(blockerID: String, blockedID: String) async throws {
         try await dependencyRepo.remove(blockerID: blockerID, blockedID: blockedID)
     }
     
-    public func getTaskBlockers(taskID: UUID) async throws -> [Task] {
+    public func getTaskBlockers(taskID: String) async throws -> [Task] {
         return try await dependencyRepo.getBlockers(taskID: taskID)
     }
     
-    public func getTasksBlockedBy(taskID: UUID) async throws -> [Task] {
+    public func getTasksBlockedBy(taskID: String) async throws -> [Task] {
         return try await dependencyRepo.getBlocking(taskID: taskID)
     }
     
-    public func isTaskBlocked(taskID: UUID) async throws -> Bool {
+    public func isTaskBlocked(taskID: String) async throws -> Bool {
         return try await dependencyRepo.isTaskBlocked(taskID: taskID)
     }
     
-    public func getDependencyChain(taskID: UUID) async throws -> DependencyChain {
+    public func getDependencyChain(taskID: String) async throws -> DependencyChain {
         return try await dependencyRepo.getDependencyChain(taskID: taskID)
     }
     
     // MARK: - Session Task Management
     
-    public func getSessionTasks(sessionID: UUID) async throws -> [TaskWithOrder] {
+    public func getSessionTasks(sessionID: String) async throws -> [TaskWithOrder] {
         return try await sessionRepo.getTasks(sessionID: sessionID)
     }
     
-    public func getSessionTaskCount(sessionID: UUID) async throws -> Int {
+    public func getSessionTaskCount(sessionID: String) async throws -> Int {
         return try await sessionRepo.getTaskCount(sessionID: sessionID)
     }
 }

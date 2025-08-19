@@ -3,10 +3,10 @@ import Foundation
 /// Repository protocol for Task operations
 public protocol TaskRepository: Sendable {
     /// Create a new task in a session
-    func create(_ task: Task, sessionID: UUID, parentTaskID: UUID?) async throws -> Task
+    func create(_ task: Task, sessionID: String, parentTaskID: String?) async throws -> Task
     
     /// Find a task by ID
-    func find(id: UUID) async throws -> Task?
+    func find(id: String) async throws -> Task?
     
     /// Find all tasks with optional filtering
     func findAll(filter: TaskFilter?) async throws -> [Task]
@@ -15,39 +15,39 @@ public protocol TaskRepository: Sendable {
     func update(_ task: Task) async throws -> Task
     
     /// Delete a task by ID
-    func delete(id: UUID, cascade: Bool) async throws
+    func delete(id: String, cascade: Bool) async throws
     
     /// Set parent relationship for a task
-    func setParent(taskID: UUID, parentID: UUID?) async throws
+    func setParent(taskID: String, parentID: String?) async throws
     
     /// Get parent task
-    func getParent(taskID: UUID) async throws -> Task?
+    func getParent(taskID: String) async throws -> Task?
     
     /// Get child tasks
-    func getChildren(taskID: UUID) async throws -> [Task]
+    func getChildren(taskID: String) async throws -> [Task]
     
     /// Reorder tasks in a session
-    func reorder(sessionID: UUID, orderedTaskIDs: [UUID]) async throws
+    func reorder(sessionID: String, orderedTaskIDs: [String]) async throws
     
     /// Batch update tasks
-    func batchUpdate(taskIDs: [UUID], updates: TaskUpdateData) async throws -> [Task]
+    func batchUpdate(taskIDs: [String], updates: TaskUpdateData) async throws -> [Task]
 }
 
 /// Filter options for task queries
 public struct TaskFilter: Sendable {
-    public let sessionID: UUID?
+    public let sessionID: String?
     public let status: TaskStatus?
     public let assignee: String?
-    public let parentTaskID: UUID?
+    public let parentTaskID: String?
     public let difficultyMax: Int?
     public let readyOnly: Bool
     public let limit: Int?
     
     public init(
-        sessionID: UUID? = nil,
+        sessionID: String? = nil,
         status: TaskStatus? = nil,
         assignee: String? = nil,
-        parentTaskID: UUID? = nil,
+        parentTaskID: String? = nil,
         difficultyMax: Int? = nil,
         readyOnly: Bool = false,
         limit: Int? = nil

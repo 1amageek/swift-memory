@@ -130,6 +130,16 @@ public actor DependencyManager {
         return try result.mapFirstRequired(to: Bool.self, at: 0)
     }
     
+    // Alias for compatibility
+    public func isTaskBlocked(taskID: String) async throws -> Bool {
+        return try await isBlocked(taskID: taskID)
+    }
+    
+    // Alias for compatibility
+    public func getDependencyChain(taskID: String) async throws -> DependencyChain {
+        return try await getFullChain(taskID: taskID)
+    }
+    
     // MARK: - Chain Operations
     
     public func getFullChain(taskID: String) async throws -> DependencyChain {
@@ -150,11 +160,10 @@ public actor DependencyManager {
         )
         
         var upstream: [DependencyChainItem] = []
+        let decoder = KuzuDecoder()
         for row in try upstreamResult.mapRows() {
-            if let taskData = row["upstream"],
-               let decoder = try? JSONDecoder(),
-               let jsonData = try? JSONSerialization.data(withJSONObject: taskData),
-               let task = try? decoder.decode(Task.self, from: jsonData),
+            if let taskData = row["upstream"] as? [String: Any],
+               let task = try? decoder.decode(Task.self, from: taskData),
                let depth = row["depth"] as? Int64 {
                 upstream.append(DependencyChainItem(task: task, depth: Int(depth)))
             }
@@ -176,10 +185,8 @@ public actor DependencyManager {
         
         var downstream: [DependencyChainItem] = []
         for row in try downstreamResult.mapRows() {
-            if let taskData = row["downstream"],
-               let decoder = try? JSONDecoder(),
-               let jsonData = try? JSONSerialization.data(withJSONObject: taskData),
-               let task = try? decoder.decode(Task.self, from: jsonData),
+            if let taskData = row["downstream"] as? [String: Any],
+               let task = try? decoder.decode(Task.self, from: taskData),
                let depth = row["depth"] as? Int64 {
                 downstream.append(DependencyChainItem(task: task, depth: Int(depth)))
             }
@@ -259,5 +266,23 @@ public struct TaskFullInfo: Codable, Sendable {
     
     public init(task: Task) {
         self.task = task
+    }
+    
+    public init(
+        task: Task,
+        session: Session? = nil,
+        parent: Task? = nil,
+        children: [Task]? = nil,
+        blockers: [Task]? = nil,
+        blocking: [Task]? = nil,
+        fullChain: DependencyChain? = nil
+    ) {
+        self.task = task
+        self.session = session
+        self.parent = parent
+        self.children = children
+        self.blockers = blockers
+        self.blocking = blocking
+        self.fullChain = fullChain
     }
 }

@@ -10,7 +10,7 @@ public actor KuzuDependencyRepository: DependencyRepository {
         self.context = context
     }
     
-    public func add(blockerID: UUID, blockedID: UUID) async throws {
+    public func add(blockerID: String, blockedID: String) async throws {
         // Check for self-loop first
         guard blockerID != blockedID else {
             throw MemoryError.invalidInput(
@@ -67,7 +67,7 @@ public actor KuzuDependencyRepository: DependencyRepository {
         }
     }
     
-    public func remove(blockerID: UUID, blockedID: UUID) async throws {
+    public func remove(blockerID: String, blockedID: String) async throws {
         _ = try await context.raw(
             """
             MATCH (blocker:Task {id: $blockerID})-[r:Blocks]->(blocked:Task {id: $blockedID})
@@ -79,7 +79,7 @@ public actor KuzuDependencyRepository: DependencyRepository {
         )
     }
     
-    public func getBlockers(taskID: UUID) async throws -> [Task] {
+    public func getBlockers(taskID: String) async throws -> [Task] {
         let result = try await context.raw(
             """
             MATCH (blocker:Task)-[:Blocks]->(blocked:Task {id: $taskID})
@@ -93,7 +93,7 @@ public actor KuzuDependencyRepository: DependencyRepository {
         return try result.map(to: Task.self)
     }
     
-    public func getBlocking(taskID: UUID) async throws -> [Task] {
+    public func getBlocking(taskID: String) async throws -> [Task] {
         let result = try await context.raw(
             """
             MATCH (blocker:Task {id: $taskID})-[:Blocks]->(blocked:Task)
@@ -106,7 +106,7 @@ public actor KuzuDependencyRepository: DependencyRepository {
         return try result.map(to: Task.self)
     }
     
-    public func isTaskBlocked(taskID: UUID) async throws -> Bool {
+    public func isTaskBlocked(taskID: String) async throws -> Bool {
         let result = try await context.raw(
             """
             MATCH (blocker:Task)-[:Blocks]->(blocked:Task {id: $taskID})
@@ -119,7 +119,7 @@ public actor KuzuDependencyRepository: DependencyRepository {
         return try result.mapFirstRequired(to: Bool.self, at: 0)
     }
     
-    public func getDependencyChain(taskID: UUID) async throws -> DependencyChain {
+    public func getDependencyChain(taskID: String) async throws -> DependencyChain {
         // Get upstream dependencies with depth
         let upstreamResult = try await context.raw(
             """
@@ -138,7 +138,7 @@ public actor KuzuDependencyRepository: DependencyRepository {
             // Beta 2 automatically extracts node properties from "blocker" column
             let task = try decoder.decode(Task.self, from: row["blocker"] as! [String: Any])
             let depth = (row["depth"] as? Int64).map(Int.init) ?? 0
-            return TaskWithDepth(task: task, depth: depth)
+            return DependencyChainItem(task: task, depth: depth)
         }
         
         // Get downstream dependencies with depth
@@ -156,7 +156,7 @@ public actor KuzuDependencyRepository: DependencyRepository {
         let downstream = try downstreamRows.map { row in
             let task = try decoder.decode(Task.self, from: row["blocked"] as! [String: Any])
             let depth = (row["depth"] as? Int64).map(Int.init) ?? 0
-            return TaskWithDepth(task: task, depth: depth)
+            return DependencyChainItem(task: task, depth: depth)
         }
         
         return DependencyChain(
@@ -166,7 +166,7 @@ public actor KuzuDependencyRepository: DependencyRepository {
         )
     }
     
-    public func wouldCreateCycle(blockerID: UUID, blockedID: UUID) async throws -> Bool {
+    public func wouldCreateCycle(blockerID: String, blockedID: String) async throws -> Bool {
         // Check if there's already a path from blocked to blocker
         let result = try await context.raw(
             """
