@@ -25,7 +25,7 @@
       "location" : "https://github.com/1amageek/OpenFoundationModels.git",
       "state" : {
         "branch" : "main",
-        "revision" : "dcee77d3ac097470f81d9fa393c44b985102abc4"
+        "revision" : "c0ec944c7eb8f8db9f53c4f728c869b2522cd714"
       }
     },
     {
@@ -60,8 +60,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-numerics.git",
       "state" : {
-        "revision" : "e0ec0f5f3af6f3e4d5e7a19d2af26b481acb6ba8",
-        "version" : "1.0.3"
+        "revision" : "bbadd4b853a33fd78c4ae977d17bb2af15eb3f2a",
+        "version" : "1.1.0"
       }
     },
     {
