@@ -149,4 +149,24 @@ public struct ListSessionsArguments: Sendable {
 }
 
 // MARK: - Dependency Tool Arguments
-// Note: Old dependency arguments removed. Use SetDependencyArguments and GetDependencyArguments from the new tools.
+
+@Generable
+public struct SetDependencyArguments: Sendable {
+    @Guide(description: "Action to perform: add or remove")
+    public let action: DependencyAction
+
+    @Guide(description: "ID of the task that blocks (dependency)")
+    public let blockerID: String
+
+    @Guide(description: "ID of the task that is blocked (dependent)")
+    public let blockedID: String
+}
+
+@Generable
+public struct GetDependencyArguments: Sendable {
+    @Guide(description: "The task ID to query dependencies for")
+    public let taskID: String
+
+    @Guide(description: "Type of dependency query to perform")
+    public let queryType: DependencyQueryType
+}

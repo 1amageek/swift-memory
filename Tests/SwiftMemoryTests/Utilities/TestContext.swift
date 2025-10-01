@@ -1,82 +1,41 @@
 import Foundation
 import Testing
+import KuzuSwiftExtension
 @testable import SwiftMemory
 
-/// Test context specific errors
-public enum TestContextError: LocalizedError {
-    case notInitialized(String)
-    
-    public var errorDescription: String? {
-        switch self {
-        case .notInitialized(let testName):
-            return "TestContext for '\(testName)' is not initialized. Call initialize() first."
-        }
-    }
-}
-
-/// Enhanced test context that provides completely isolated managers for testing
-/// Ensures proper resource management and cleanup to prevent database conflicts
-public final class TestContext: @unchecked Sendable {
-    public let sessionManager: SessionManager
-    public let taskManager: TaskManager
-    public let dependencyManager: DependencyManager
-    
-    private let provider: TestDatabaseProvider
+/// Simplified test context with in-memory database
+public final class TestContext {
+    public let context: GraphContext
     private let testName: String
-    private var isInitialized = false
-    
-    /// Initialize test context with completely isolated database instance
-    public init(testName: String) {
+
+    /// Initialize test context with in-memory database
+    public init(testName: String = #function) throws {
         self.testName = testName
-        self.provider = TestDatabaseProvider(testName: testName)
-        
-        // Initialize managers with isolated provider
-        self.sessionManager = SessionManager(contextProvider: provider)
-        self.taskManager = TaskManager(contextProvider: provider)
-        self.dependencyManager = DependencyManager(contextProvider: provider)
+
+        // Create in-memory GraphContainer
+        let container = try GraphContainer(
+            for: Session.self,
+                Task.self,
+                HasTask.self,
+                SubTaskOf.self,
+                Blocks.self,
+            configuration: GraphConfiguration(databasePath: ":memory:")
+        )
+
+        self.context = GraphContext(container)
     }
-    
-    /// Initialize the isolated database instance
-    public func initialize() async throws {
-        guard !isInitialized else { return }
-        try await provider.initialize()
-        isInitialized = true
+
+    // MARK: - Helper Methods
+
+    /// Create a test session
+    public func createSession(title: String = "Test Session") throws -> Session {
+        let session = Session(title: title)
+        context.insert(session)
+        try context.save()
+        return session
     }
-    
-    /// Clean up all resources and remove temporary database
-    public func cleanup() async {
-        await provider.cleanup()
-        isInitialized = false
-    }
-    
-    /// Convenience initializer that automatically initializes the context
-    public static func create(testName: String) async throws -> TestContext {
-        let context = TestContext(testName: testName)
-        try await context.initialize()
-        return context
-    }
-    
-    deinit {
-        // Note: cleanup() must be called explicitly before deallocation
-        // as we cannot perform async operations in deinit
-    }
-    
-    // MARK: - Validation
-    
-    /// Ensure the context is properly initialized before use
-    private func ensureInitialized() throws {
-        guard isInitialized else {
-            throw TestContextError.notInitialized(testName)
-        }
-    }
-    
-    // MARK: - Helper Methods with Managers
-    
-    public func createSession(title: String = "Test Session") async throws -> Session {
-        try ensureInitialized()
-        return try await sessionManager.create(title: title)
-    }
-    
+
+    /// Create a test task in a session
     public func createTask(
         in session: Session,
         title: String = "Test Task",
@@ -84,123 +43,139 @@ public final class TestContext: @unchecked Sendable {
         difficulty: Int = 3,
         assignee: String? = nil,
         parentTaskID: String? = nil
-    ) async throws -> Task {
-        try ensureInitialized()
-        return try await taskManager.create(
-            sessionID: session.id,
+    ) throws -> Task {
+        let task = Task(
             title: title,
             description: description,
-            difficulty: difficulty,
             assignee: assignee,
-            parentTaskID: parentTaskID
+            difficulty: difficulty
         )
+
+        // Save task node
+        context.insert(task)
+        try context.save()
+
+        // Create relationships in transaction
+        try context.withRawTransaction { conn in
+            // Get next order
+            let orderResult = try conn.query("""
+                MATCH (s:Session {id: '\(session.id)'})-[r:HasTask]->(:Task)
+                RETURN max(r.order) as maxOrder
+                """)
+            let maxOrder: Int
+            if orderResult.hasNext(),
+               let row = try orderResult.getNext(),
+               let value = try? row.getValue(0) as? Int64 {
+                maxOrder = Int(value)
+            } else {
+                maxOrder = 0
+            }
+
+            // Create HasTask relationship
+            _ = try conn.query("""
+                MATCH (s:Session {id: '\(session.id)'}), (t:Task {id: '\(task.id)'})
+                MERGE (s)-[r:HasTask]->(t)
+                SET r.order = \(maxOrder + 1)
+                """)
+
+            // Create SubTaskOf relationship if parent specified
+            if let parentID = parentTaskID {
+                _ = try conn.query("""
+                    MATCH (child:Task {id: '\(task.id)'}), (parent:Task {id: '\(parentID)'})
+                    MERGE (child)-[:SubTaskOf]->(parent)
+                    """)
+            }
+        }
+
+        return task
     }
-    
+
+    /// Create a task hierarchy (parent -> child -> grandchild)
     public func createTaskHierarchy(
         in session: Session
-    ) async throws -> (parent: Task, child: Task, grandchild: Task) {
-        try ensureInitialized()
-        let parent = try await createTask(in: session, title: "Parent Task")
-        
-        let child = try await taskManager.create(
-            sessionID: session.id,
-            title: "Child Task",
-            parentTaskID: parent.id
-        )
-        
-        let grandchild = try await taskManager.create(
-            sessionID: session.id,
-            title: "Grandchild Task",
-            parentTaskID: child.id
-        )
-        
+    ) throws -> (parent: Task, child: Task, grandchild: Task) {
+        let parent = try createTask(in: session, title: "Parent Task")
+        let child = try createTask(in: session, title: "Child Task", parentTaskID: parent.id)
+        let grandchild = try createTask(in: session, title: "Grandchild Task", parentTaskID: child.id)
+
         return (parent, child, grandchild)
     }
-    
+
+    /// Create a dependency chain (first blocks second blocks third)
     public func createDependencyChain(
         in session: Session
-    ) async throws -> (first: Task, second: Task, third: Task) {
-        try ensureInitialized()
-        let first = try await createTask(in: session, title: "First Task")
-        let second = try await createTask(in: session, title: "Second Task")
-        let third = try await createTask(in: session, title: "Third Task")
-        
-        try await dependencyManager.add(
-            blockerID: first.id,
-            blockedID: second.id
-        )
-        
-        try await dependencyManager.add(
-            blockerID: second.id,
-            blockedID: third.id
-        )
-        
+    ) throws -> (first: Task, second: Task, third: Task) {
+        let first = try createTask(in: session, title: "First Task")
+        let second = try createTask(in: session, title: "Second Task")
+        let third = try createTask(in: session, title: "Third Task")
+
+        // Add dependencies
+        _ = try context.raw("""
+            MATCH (blocker:Task {id: '\(first.id)'}), (blocked:Task {id: '\(second.id)'})
+            MERGE (blocker)-[:Blocks]->(blocked)
+            """)
+        _ = try context.raw("""
+            MATCH (blocker:Task {id: '\(second.id)'}), (blocked:Task {id: '\(third.id)'})
+            MERGE (blocker)-[:Blocks]->(blocked)
+            """)
+
         return (first, second, third)
     }
-    
+
+    /// Create tasks with different statuses
     public func createTasksWithStatuses(
         in session: Session
-    ) async throws -> (pending: Task, inProgress: Task, done: Task, cancelled: Task) {
-        try ensureInitialized()
-        let pending = try await createTask(in: session, title: "Pending Task")
-        
-        let inProgress = try await createTask(in: session, title: "In Progress Task")
-        _ = try await taskManager.update(
-            id: inProgress.id,
-            status: .inProgress
-        )
-        
-        let done = try await createTask(in: session, title: "Done Task")
-        _ = try await taskManager.update(
-            id: done.id,
-            status: .done
-        )
-        
-        let cancelled = try await createTask(in: session, title: "Cancelled Task")
-        _ = try await taskManager.update(
-            id: cancelled.id,
-            status: .cancelled,
-            cancelReason: "Test cancellation"
-        )
-        
+    ) throws -> (pending: Task, inProgress: Task, done: Task, cancelled: Task) {
+        let pending = try createTask(in: session, title: "Pending Task")
+
+        var inProgress = try createTask(in: session, title: "In Progress Task")
+        inProgress.status = .inProgress
+        inProgress.updatedAt = Date()
+        context.insert(inProgress)
+        try context.save()
+
+        var done = try createTask(in: session, title: "Done Task")
+        done.status = .done
+        done.updatedAt = Date()
+        context.insert(done)
+        try context.save()
+
+        var cancelled = try createTask(in: session, title: "Cancelled Task")
+        cancelled.status = .cancelled
+        cancelled.cancelReason = "Test cancellation"
+        cancelled.updatedAt = Date()
+        context.insert(cancelled)
+        try context.save()
+
         return (pending, inProgress, done, cancelled)
     }
-    
+
+    /// Create tasks with different difficulties
     public func createTasksWithDifficulties(
         in session: Session
-    ) async throws -> [Task] {
-        try ensureInitialized()
+    ) throws -> [Task] {
         var tasks: [Task] = []
-        
+
         for difficulty in 1...5 {
-            let task = try await createTask(
+            let task = try createTask(
                 in: session,
                 title: "Difficulty \(difficulty) Task",
                 difficulty: difficulty
             )
             tasks.append(task)
         }
-        
+
         return tasks
     }
 }
 
 // MARK: - Test Execution Helper
 
-/// Execute a test with automatic TestContext creation and cleanup
-/// This ensures cleanup is properly awaited before the test completes
+/// Execute a test with automatic TestContext creation
 public func withTestContext(
     testName: String = #function,
-    _ body: (TestContext) async throws -> Void
-) async throws {
-    let context = try await TestContext.create(testName: testName)
-    do {
-        try await body(context)
-    } catch {
-        // Ensure cleanup happens even on error
-        await context.cleanup()
-        throw error
-    }
-    // Normal cleanup
-    await context.cleanup()
+    _ body: (TestContext) throws -> Void
+) throws {
+    let context = try TestContext(testName: testName)
+    try body(context)
 }

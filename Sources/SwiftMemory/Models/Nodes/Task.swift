@@ -12,8 +12,8 @@ public struct Task: Codable, Sendable {
     public var cancelReason: String?
     public var assignee: String?
     public var difficulty: Int = 3
-    @Timestamp public var createdAt: Date = Date()
-    @Timestamp public var updatedAt: Date = Date()
+    public var createdAt: Date = Date()
+    public var updatedAt: Date = Date()
     
     public init(
         id: String = UUID().uuidString,

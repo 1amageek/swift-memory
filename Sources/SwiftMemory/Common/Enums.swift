@@ -1,5 +1,64 @@
 import Foundation
 import OpenFoundationModels
+
+// MARK: - Task Full Information
+
+/// Full task information including relationships
+public struct TaskFullInfo: Codable, Sendable {
+    public let task: Task
+    public let session: Session?
+    public let parent: Task?
+    public let children: [Task]
+    public let blockers: [Task]
+    public let blocking: [Task]
+
+    public init(
+        task: Task,
+        session: Session? = nil,
+        parent: Task? = nil,
+        children: [Task] = [],
+        blockers: [Task] = [],
+        blocking: [Task] = []
+    ) {
+        self.task = task
+        self.session = session
+        self.parent = parent
+        self.children = children
+        self.blockers = blockers
+        self.blocking = blocking
+    }
+}
+
+// MARK: - Dependency Chain
+
+/// Dependency chain information
+public struct DependencyChain: Codable, Sendable {
+    public let taskID: String
+    public let upstream: [DependencyChainItem]
+    public let downstream: [DependencyChainItem]
+
+    public init(
+        taskID: String,
+        upstream: [DependencyChainItem],
+        downstream: [DependencyChainItem]
+    ) {
+        self.taskID = taskID
+        self.upstream = upstream
+        self.downstream = downstream
+    }
+}
+
+/// Item in dependency chain with depth information
+public struct DependencyChainItem: Codable, Sendable {
+    public let task: Task
+    public let depth: Int
+
+    public init(task: Task, depth: Int) {
+        self.task = task
+        self.depth = depth
+    }
+}
+
 import OpenFoundationModelsCore
 import OpenFoundationModelsMacros
 

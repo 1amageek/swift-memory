@@ -142,35 +142,19 @@ extension MemoryToolResult: PromptRepresentable {
                 message += "\n\nParent: \(parent.title)"
             }
             
-            if let children = info.children, !children.isEmpty {
-                message += "\n\nChildren (\(children.count)):"
-                message += children.map { "\n  - \($0.title)" }.joined()
+            if !info.children.isEmpty {
+                message += "\n\nChildren (\(info.children.count)):"
+                message += info.children.map { "\n  - \($0.title)" }.joined()
             }
-            
-            if let blockers = info.blockers, !blockers.isEmpty {
-                message += "\n\nBlocked by (\(blockers.count)):"
-                message += blockers.map { "\n  - \($0.title) [\($0.status.displayName)]" }.joined()
+
+            if !info.blockers.isEmpty {
+                message += "\n\nBlocked by (\(info.blockers.count)):"
+                message += info.blockers.map { "\n  - \($0.title) [\($0.status.displayName)]" }.joined()
             }
-            
-            if let blocking = info.blocking, !blocking.isEmpty {
-                message += "\n\nBlocking (\(blocking.count)):"
-                message += blocking.map { "\n  - \($0.title)" }.joined()
-            }
-            
-            if let chain = info.fullChain {
-                if !chain.upstream.isEmpty {
-                    message += "\n\nFull upstream chain (\(chain.upstream.count)):"
-                    for item in chain.upstream {
-                        message += "\n  " + String(repeating: "  ", count: item.depth - 1) + "- \(item.task.title)"
-                    }
-                }
-                
-                if !chain.downstream.isEmpty {
-                    message += "\n\nFull downstream chain (\(chain.downstream.count)):"
-                    for item in chain.downstream {
-                        message += "\n  " + String(repeating: "  ", count: item.depth - 1) + "- \(item.task.title)"
-                    }
-                }
+
+            if !info.blocking.isEmpty {
+                message += "\n\nBlocking (\(info.blocking.count)):"
+                message += info.blocking.map { "\n  - \($0.title)" }.joined()
             }
             
             return Prompt(message)
