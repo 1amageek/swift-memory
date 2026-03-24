@@ -3,37 +3,38 @@
 
 import Foundation
 
-/// Parameters for recalling relevant Given and Knowledge from memory.
+/// Parameters for recalling relevant entities from memory.
 ///
-/// Pure data retrieval — no LLM interpretation.
+/// Supports two recall strategies:
+/// - **Keywords**: Spreading activation from label-matched seed entities
+/// - **Embedding**: Vector similarity search on Given Store
 public struct RecallQuery: Sendable {
+
+    /// Keywords for spreading activation recall.
+    ///
+    /// Each keyword is matched against rdfs:label via substring search.
+    /// Matched entities become seeds for bidirectional graph traversal.
+    /// Entities reached by multiple keywords score higher (convergence).
+    public var keywords: [String]
 
     /// Embedding vector for semantic nearest-neighbor search on Given.
     public var embedding: [Float]?
 
-    /// Raw SPARQL query to execute directly on the knowledge graph.
-    public var sparql: String?
-
-    /// Starting IRI for graph traversal.
-    public var anchor: String?
-
-    /// Graph traversal depth (default: 2).
-    public var depth: Int
+    /// Maximum hops from seed entities (default: 2).
+    public var maxHops: Int
 
     /// Maximum number of results to return.
     public var limit: Int
 
     public init(
+        keywords: [String] = [],
         embedding: [Float]? = nil,
-        sparql: String? = nil,
-        anchor: String? = nil,
-        depth: Int = 2,
-        limit: Int = 10
+        maxHops: Int = 2,
+        limit: Int = 20
     ) {
+        self.keywords = keywords
         self.embedding = embedding
-        self.sparql = sparql
-        self.anchor = anchor
-        self.depth = depth
+        self.maxHops = maxHops
         self.limit = limit
     }
 }

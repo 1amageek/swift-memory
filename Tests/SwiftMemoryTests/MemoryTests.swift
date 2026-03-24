@@ -34,10 +34,34 @@ struct MemoryTests {
     @Test
     func recallQueryDefaults() {
         let query = RecallQuery()
-        #expect(query.depth == 2)
-        #expect(query.limit == 10)
+        #expect(query.maxHops == 2)
+        #expect(query.limit == 20)
+        #expect(query.keywords.isEmpty)
         #expect(query.embedding == nil)
-        #expect(query.anchor == nil)
+    }
+
+    @Test
+    func recalledEntityScore() {
+        let entity = RecalledEntity(
+            iri: "ex:Alice",
+            label: "Alice",
+            type: "ex:Person",
+            score: 3,
+            paths: [
+                "direct match",
+                "ex:Bob --[ex:worksAt]--> ex:Acme",
+                "ex:Task1 --[ex:assignedTo]--> ex:Alice",
+            ]
+        )
+        #expect(entity.score == 3)
+        #expect(entity.paths.count == 3)
+    }
+
+    @Test
+    func emptyRecallResult() {
+        let result = RecallResult.empty
+        #expect(result.entities.isEmpty)
+        #expect(result.givens.isEmpty)
     }
 
     @Test
@@ -62,7 +86,7 @@ struct MemoryTests {
 
     @Test
     func stringMemoryEncodable() async throws {
-        let container = GivenEncodingContainer()
+        let givenContainer = GivenEncodingContainer()
         let knowledgeContainer = KnowledgeEncodingContainer()
 
         struct TestEncoding: MemoryEncoding {
@@ -72,11 +96,10 @@ struct MemoryTests {
             func knowledgeContainer() -> KnowledgeEncodingContainer { knowledge }
         }
 
-        let encoding = TestEncoding(givens: container, knowledge: knowledgeContainer)
-        let input = "Hello world"
-        try await input.encode(to: encoding)
+        let encoding = TestEncoding(givens: givenContainer, knowledge: knowledgeContainer)
+        try await "Hello world".encode(to: encoding)
 
-        let materials = container.collectMaterials()
+        let materials = givenContainer.collectMaterials()
         #expect(materials.count == 1)
         #expect(materials[0].payload == "Hello world")
         #expect(materials[0].source == "text")

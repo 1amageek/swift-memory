@@ -23,8 +23,11 @@ import FDBite
 /// // Store — input encodes itself via MemoryEncodable.encode(to:)
 /// try await memory.store("Today I saw cherry blossoms in Shibuya")
 ///
-/// // Recall — pure data retrieval from Given Store + Knowledge Store
-/// let result = try await memory.recall(RecallQuery(anchor: "ex:Shibuya"))
+/// // Recall — spreading activation from keywords
+/// let result = try await memory.recall(RecallQuery(keywords: ["cherry blossoms"]))
+/// for entity in result.entities {
+///     print("\(entity.label) (score: \(entity.score))")
+/// }
 /// ```
 public actor Memory {
 
@@ -42,8 +45,7 @@ public actor Memory {
     ///
     /// 1. `input.encode(to: encoding)` — the type submits its materials
     /// 2. Containers collect Given materials and Knowledge statements
-    /// 3. `MemoryEncoding` processes them (embeddings, enrichment)
-    /// 4. Memory persists both atomically
+    /// 3. Memory persists both atomically
     public func store(_ input: any MemoryEncodable) async throws {
 
         // Input encodes itself to the MemoryEncoding destination
@@ -55,7 +57,7 @@ public actor Memory {
             let given = Given(
                 modality: material.modality,
                 payloadRef: material.payload,
-                embedding: [],  // MemoryEncoding implementation fills this
+                embedding: [],
                 timestamp: Date(),
                 source: material.source
             )
@@ -78,10 +80,11 @@ public actor Memory {
         try await context.fdbContext.save()
     }
 
-    /// Recall relevant Given and Knowledge from memory.
+    /// Recall relevant entities and givens from memory.
     ///
-    /// Pure data retrieval — searches Given Store and traverses Knowledge Store.
-    public func recall(_ query: RecallQuery) async throws -> MemoryBatch {
+    /// Uses spreading activation for keyword-based recall
+    /// and vector similarity for embedding-based recall.
+    public func recall(_ query: RecallQuery) async throws -> RecallResult {
         try await recallEngine.execute(query)
     }
 }
