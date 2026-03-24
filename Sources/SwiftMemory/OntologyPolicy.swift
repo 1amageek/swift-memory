@@ -337,8 +337,8 @@ public enum OntologyPolicy {
         // Event ObjectProperties
         "ex:hasParticipant", "ex:participatesIn",
         "ex:causes", "ex:causedBy",
-        // Event DataProperties
-        "ex:occurredOnDate", "ex:occurredAtTime",
+        // Occurrent DataProperties
+        "ex:date", "ex:time",
         "ex:startDate", "ex:endDate",
         // External Reference DataProperties
         "ex:wikipediaURL", "ex:officialURL", "ex:imageURL",
@@ -508,14 +508,14 @@ public enum OntologyPolicy {
             // ── RBox: Occurrent Data Properties (shared by Event and Era) ──
 
             OWLDataProperty(
-                iri: "ex:occurredOnDate",
-                label: "occurred on date",
+                iri: "ex:date",
+                label: "date",
                 domains: [.named("ex:Occurrent")],
                 ranges: [.datatype(XSDDatatype.date.iri)]
             )
             OWLDataProperty(
-                iri: "ex:occurredAtTime",
-                label: "occurred at time",
+                iri: "ex:time",
+                label: "time",
                 domains: [.named("ex:Occurrent")],
                 ranges: [.datatype(XSDDatatype.time.iri)]
             )
@@ -584,7 +584,7 @@ public enum OntologyPolicy {
     - refersTo / mentions（reference）
     - sameAs / exactMatch / closeMatch（identity）
     - derivedFrom / hasSource（provenance）
-    - occurredOnDate / occurredAtTime / startDate / endDate（temporal）
+    - date / time / startDate / endDate（temporal）
 
     ## クラスか属性かの判断基準
 
@@ -675,10 +675,10 @@ public enum OntologyPolicy {
     新規イベントクラスは最も近いサブタイプの子として定義する。
 
     ### イベントの時間述語（DataProperty）
-    - ex:occurredOnDate — 日付（domain: ex:Event, range: ISO 8601 精度別 xsd:gYear YYYY / xsd:gYearMonth YYYY-MM / xsd:date YYYY-MM-DD）
-    - ex:occurredAtTime — 時刻（domain: ex:Event, range: xsd:time HH:MM:SS）。明示されている場合のみ
-    - ex:startDate — 期間の開始日（domain: ex:Event, range: 同上）
-    - ex:endDate — 期間の終了日（domain: ex:Event, range: 同上）
+    - ex:date — 日付（domain: ex:Occurrent, range: ISO 8601 精度別 xsd:gYear YYYY / xsd:gYearMonth YYYY-MM / xsd:date YYYY-MM-DD）。過去・未来を問わない
+    - ex:time — 時刻（domain: ex:Occurrent, range: xsd:time HH:MM:SS）。明示されている場合のみ
+    - ex:startDate — 期間の開始日（domain: ex:Occurrent, range: 同上）
+    - ex:endDate — 期間の終了日（domain: ex:Occurrent, range: 同上）
 
     ### イベントの関係述語（ObjectProperty）
     - ex:hasParticipant — 参加エンティティ（domain: ex:Event, archetype: participation）
