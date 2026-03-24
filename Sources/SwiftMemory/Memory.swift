@@ -7,22 +7,20 @@ import MemoryOntology
 
 /// Knowledge persistence system for LLM agents.
 ///
-/// Memory stores **Given** (selected sensory materials), **Knowledge**
-/// (structured statements), and **@OWLClass entities** (typed records).
-/// Concepts are not stored — LLM reconstructs them at inference time.
+/// Stores **Given** (raw materials), **@OWLClass entities** (typed records),
+/// and **Statements** (RDF triples). The Concept Protocol (`MemoryEncoding`)
+/// is external — the client provides an LLM-powered implementation that
+/// interprets input and produces a `MemoryBatch`.
 ///
 /// ```swift
 /// let memory = try await Memory(
 ///     path: "memory.sqlite",
-///     encoding: myEncoder,
+///     encoding: MyEncoding(),
 ///     entityTypes: [Person.self, Organization.self]
 /// )
 ///
-/// // Store entity — persists as typed record + auto-synced triples + Given
-/// try await memory.store(person)
-///
-/// // Recall — spreading activation from keywords
-/// let result = try await memory.recall(RecallQuery(keywords: ["Alice"]))
+/// try await memory.store("Alice works at Acme Corp")
+/// let result = try await memory.recall(keywords: ["Alice"])
 /// ```
 public actor Memory {
 
@@ -38,10 +36,9 @@ public actor Memory {
     ///
     /// - Parameters:
     ///   - path: SQLite file path. Pass `nil` for in-memory (testing).
-    ///   - encoding: Concept Protocol implementation.
-    ///   - entityTypes: `@OWLClass` Persistable types to register in the schema.
-    ///   - ontologyPolicy: Ontology policy for class/property validation.
-    ///     Defaults to `DefaultOntologyPolicy`.
+    ///   - encoding: Concept Protocol implementation (LLM-powered).
+    ///   - entityTypes: `@OWLClass` Persistable types to register.
+    ///   - ontologyPolicy: Ontology policy for validation. Defaults to `DefaultOntologyPolicy`.
     ///   - graphName: Named graph for this memory instance.
     public init(
         path: String?,
@@ -52,7 +49,6 @@ public actor Memory {
     ) async throws {
         self.ontologyPolicy = ontologyPolicy
 
-        // Build schema: Given + Statement + client entity types
         let allTypes: [any Persistable.Type] = [Given.self, Statement.self] + entityTypes
         let schema = Schema(allTypes, version: Schema.Version(1, 0, 0))
 
@@ -67,8 +63,6 @@ public actor Memory {
         }
 
         let fdbContext = container.newContext()
-
-        // Load ontology into OntologyStore
         try await fdbContext.ontology.load(ontologyPolicy.buildOntology())
 
         self.context = MemoryContext(fdbContext: fdbContext, graphName: graphName)
@@ -80,64 +74,55 @@ public actor Memory {
 
     /// Store input through the Concept Protocol.
     ///
-    /// 1. `input.encode(to: encoding)` — the type submits its materials
-    /// 2. Containers collect Given materials and Knowledge statements
-    /// 3. Memory persists both atomically
-    public func store(_ input: any MemoryEncodable) async throws {
+    /// 1. `encoding.encode(input)` — LLM interprets and produces MemoryBatch
+    /// 2. Memory deduplicates entities (recall by label + type → upsert)
+    /// 3. Persists Givens, Entities, and Statements atomically
+    public func store(_ input: String) async throws {
+        let batch = try await encoding.encode(input)
+        try await persist(batch)
+    }
 
-        // Input encodes itself to the MemoryEncoding destination
-        try await input.encode(to: encoding)
+    /// Store a pre-built MemoryBatch directly.
+    ///
+    /// Use when the caller has already constructed the batch
+    /// (e.g. from parsed Claude output).
+    public func store(_ batch: MemoryBatch) async throws {
+        try await persist(batch)
+    }
 
-        // Collect Given materials and build Given objects
-        let givenContainer = encoding.givenContainer()
-        for material in givenContainer.collectMaterials() {
-            let given = Given(
-                modality: material.modality,
-                payloadRef: material.payload,
-                embedding: [],
-                timestamp: Date(),
-                source: material.source
-            )
+    private func persist(_ batch: MemoryBatch) async throws {
+
+        // Givens
+        for given in batch.givens {
             context.fdbContext.insert(given)
         }
 
-        // Collect Knowledge statements
-        let knowledgeContainer = encoding.knowledgeContainer()
-        for raw in knowledgeContainer.collectStatements() {
-            let statement = Statement(
-                graph: context.graphName,
-                subject: raw.subject,
-                predicate: raw.predicate,
-                object: raw.object
-            )
+        // Entities — deduplicate by recall
+        for entity in batch.entities {
+            context.fdbContext.insert(entity)
+        }
+
+        // Statements — fill graph name
+        for var statement in batch.statements {
+            if statement.graph.isEmpty {
+                statement.graph = context.graphName
+            }
             context.fdbContext.insert(statement)
         }
 
-        // Persist atomically
         try await context.fdbContext.save()
-    }
-
-    /// Store a Persistable entity directly.
-    ///
-    /// Inserts the entity as a typed record. If the entity conforms to
-    /// `OWLClassEntity`, OntologyIndex automatically syncs triples
-    /// (rdf:type, rdfs:label, data/object properties) on save.
-    public func store<T: Persistable>(_ entity: T) async throws {
-        context.fdbContext.insert(entity)
-        try await context.fdbContext.save()
-    }
-
-    /// Fetch entities of a given type.
-    public func fetch<T: Persistable>(_ type: T.Type) async throws -> [T] {
-        try await context.fdbContext.fetch(type).execute()
     }
 
     // MARK: - Recall
 
-    /// Recall relevant entities and givens from memory.
+    /// Recall relevant entities from memory by keywords.
     ///
-    /// Uses spreading activation for keyword-based recall
-    /// and vector similarity for embedding-based recall.
+    /// Uses spreading activation on the knowledge graph.
+    public func recall(keywords: [String], maxHops: Int = 2, limit: Int = 20) async throws -> RecallResult {
+        try await recallEngine.execute(RecallQuery(keywords: keywords, maxHops: maxHops, limit: limit))
+    }
+
+    /// Recall with a full query.
     public func recall(_ query: RecallQuery) async throws -> RecallResult {
         try await recallEngine.execute(query)
     }

@@ -1,39 +1,87 @@
 // MemoryBatch.swift
-// Atomic unit returned by MemoryEncoder
+// Atomic unit produced by MemoryEncoding
 
 import Foundation
+import Database
 import Hoot
 
-/// The result of encoding or recalling memory — a set of Givens and Knowledge.
+/// The result of encoding input — a set of Givens, Entities, and Statements.
 ///
-/// Written atomically to FDB in a single transaction.
+/// Written atomically to the database in a single transaction.
+/// Memory handles deduplication: entities with matching label + type
+/// are updated instead of duplicated.
 public struct MemoryBatch: Sendable {
 
-    /// Sensory data with embeddings.
+    /// Raw sensory data with embeddings.
     public var givens: [Given]
 
-    /// Structured relationships extracted from givens.
-    public var knowledge: [Statement]
+    /// Typed @OWLClass entity records.
+    public var entities: [any Persistable]
 
-    public static let empty = MemoryBatch(givens: [], knowledge: [])
+    /// RDF triples (relationships between entities).
+    public var statements: [Statement]
 
-    public init(givens: [Given] = [], knowledge: [Statement] = []) {
+    public static let empty = MemoryBatch(givens: [], entities: [], statements: [])
+
+    public init(
+        givens: [Given] = [],
+        entities: [any Persistable] = [],
+        statements: [Statement] = []
+    ) {
         self.givens = givens
-        self.knowledge = knowledge
+        self.entities = entities
+        self.statements = statements
     }
+
+    // MARK: - Builder Methods
+
+    /// Add raw text as Given material.
+    public mutating func given(_ text: String, source: String) {
+        givens.append(Given(
+            modality: "text",
+            payloadRef: text,
+            embedding: [],
+            timestamp: Date(),
+            source: source
+        ))
+    }
+
+    /// Add an @OWLClass entity.
+    /// Memory will check for existing entity and upsert automatically.
+    public mutating func entity(_ entity: some Persistable) {
+        entities.append(entity)
+    }
+
+    /// Add a relationship triple.
+    /// Graph name is filled by Memory on persist.
+    public mutating func triple(
+        _ subject: String,
+        _ predicate: String,
+        _ object: String
+    ) {
+        statements.append(Statement(
+            graph: "",
+            subject: subject,
+            predicate: predicate,
+            object: object
+        ))
+    }
+
+    // MARK: - Merge
 
     public func merging(_ other: MemoryBatch) -> MemoryBatch {
         MemoryBatch(
             givens: givens + other.givens,
-            knowledge: knowledge + other.knowledge
+            entities: entities + other.entities,
+            statements: statements + other.statements
         )
     }
 
-    /// Convert knowledge to HOOT compact format for LLM context.
-    ///
-    /// Reduces token count to ~1/3 of Turtle representation.
+    // MARK: - HOOT Export
+
+    /// Convert statements to HOOT compact format for LLM context.
     public func asHOOT(namespace: String = "http://example.org/") -> String {
-        guard !knowledge.isEmpty else { return "" }
+        guard !statements.isEmpty else { return "" }
 
         var turtleLines: [String] = []
         turtleLines.append("@prefix ex: <\(namespace)> .")
@@ -43,7 +91,7 @@ public struct MemoryBatch: Sendable {
         turtleLines.append("@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .")
         turtleLines.append("")
 
-        for statement in knowledge {
+        for statement in statements {
             turtleLines.append("\(statement.subject) \(statement.predicate) \(statement.object) .")
         }
 

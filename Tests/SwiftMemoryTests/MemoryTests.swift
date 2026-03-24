@@ -1,5 +1,6 @@
 import Testing
 import SwiftMemory
+import MemoryOntology
 
 @Suite
 struct MemoryTests {
@@ -8,27 +9,40 @@ struct MemoryTests {
     func emptyBatch() {
         let batch = MemoryBatch.empty
         #expect(batch.givens.isEmpty)
-        #expect(batch.knowledge.isEmpty)
+        #expect(batch.entities.isEmpty)
+        #expect(batch.statements.isEmpty)
+    }
+
+    @Test
+    func batchBuilderMethods() {
+        var batch = MemoryBatch()
+        batch.given("hello", source: "test")
+        batch.triple("ex:A", "rdf:type", "ex:Person")
+        #expect(batch.givens.count == 1)
+        #expect(batch.statements.count == 1)
+        #expect(batch.givens[0].payloadRef == "hello")
+        #expect(batch.statements[0].subject == "ex:A")
     }
 
     @Test
     func mergeBatches() {
         let a = MemoryBatch(
-            givens: [],
-            knowledge: [Statement(subject: "ex:A", predicate: "rdf:type", object: "ex:Person")]
+            statements: [Statement(subject: "ex:A", predicate: "rdf:type", object: "ex:Person")]
         )
         let b = MemoryBatch(
-            givens: [],
-            knowledge: [Statement(subject: "ex:B", predicate: "rdf:type", object: "ex:Place")]
+            statements: [Statement(subject: "ex:B", predicate: "rdf:type", object: "ex:Place")]
         )
         let merged = a.merging(b)
-        #expect(merged.knowledge.count == 2)
+        #expect(merged.statements.count == 2)
     }
 
     @Test
-    func ontologyPolicyPrimitiveClasses() {
-        #expect(OntologyPolicy.primitiveClasses.count == 26)
-        #expect(!OntologyPolicy.seedSubClasses.isEmpty)
+    func defaultOntologyPolicy() {
+        let policy = DefaultOntologyPolicy()
+        #expect(policy.primitiveClasses.count == 26)
+        #expect(!policy.seedSubClasses.isEmpty)
+        #expect(policy.validate(typeIRI: "ex:Person"))
+        #expect(!policy.validate(typeIRI: "ex:Spaceship"))
     }
 
     @Test
@@ -62,46 +76,5 @@ struct MemoryTests {
         let result = RecallResult.empty
         #expect(result.entities.isEmpty)
         #expect(result.givens.isEmpty)
-    }
-
-    @Test
-    func givenEncodingContainer() {
-        let container = GivenEncodingContainer()
-        container.encode("hello", source: "test")
-        container.encode(imageRef: "img://abc", source: "test")
-        let materials = container.collectMaterials()
-        #expect(materials.count == 2)
-        #expect(materials[0].modality == "text")
-        #expect(materials[1].modality == "image")
-    }
-
-    @Test
-    func knowledgeEncodingContainer() {
-        let container = KnowledgeEncodingContainer()
-        container.encode(subject: "ex:A", predicate: "rdf:type", object: "ex:Person")
-        let statements = container.collectStatements()
-        #expect(statements.count == 1)
-        #expect(statements[0].subject == "ex:A")
-    }
-
-    @Test
-    func stringMemoryEncodable() async throws {
-        let givenContainer = GivenEncodingContainer()
-        let knowledgeContainer = KnowledgeEncodingContainer()
-
-        struct TestEncoding: MemoryEncoding {
-            let givens: GivenEncodingContainer
-            let knowledge: KnowledgeEncodingContainer
-            func givenContainer() -> GivenEncodingContainer { givens }
-            func knowledgeContainer() -> KnowledgeEncodingContainer { knowledge }
-        }
-
-        let encoding = TestEncoding(givens: givenContainer, knowledge: knowledgeContainer)
-        try await "Hello world".encode(to: encoding)
-
-        let materials = givenContainer.collectMaterials()
-        #expect(materials.count == 1)
-        #expect(materials[0].payload == "Hello world")
-        #expect(materials[0].source == "text")
     }
 }

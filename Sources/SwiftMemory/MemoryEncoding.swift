@@ -1,20 +1,27 @@
 // MemoryEncoding.swift
-// Concept Protocol — provides containers for Given Store and Knowledge Store
+// Concept Protocol — interprets input and produces MemoryBatch
 
-/// The Concept Protocol destination.
-///
-/// Analogous to `Encoder` in Swift's standard library.
-/// Provides containers that `MemoryEncodable` types use to submit
-/// their content for persistence in Given Store and Knowledge Store.
+/// The Concept Protocol.
 ///
 /// Implementations (LLM, VLM, rules, etc.) are provided by the **client**.
-/// The implementation decides how to process submitted materials —
-/// e.g., computing embeddings, extracting additional knowledge via LLM.
+/// Given raw input, the encoding interprets it and produces a `MemoryBatch`
+/// containing Givens (raw materials), Entities (@OWLClass records),
+/// and Statements (RDF triples).
+///
+/// ```swift
+/// struct MyEncoding: MemoryEncoding {
+///     func encode(_ input: String) async throws -> MemoryBatch {
+///         let analysis = await llm.analyze(input)
+///         var batch = MemoryBatch()
+///         batch.given(input, source: "chat")
+///         batch.entity(Person(name: analysis.personName))
+///         batch.triple(personIRI, "ex:worksAt", orgIRI)
+///         return batch
+///     }
+/// }
+/// ```
 public protocol MemoryEncoding: Sendable {
 
-    /// Returns a container for submitting Given materials.
-    func givenContainer() -> GivenEncodingContainer
-
-    /// Returns a container for submitting Knowledge (statements).
-    func knowledgeContainer() -> KnowledgeEncodingContainer
+    /// Interpret input and produce a batch of materials to persist.
+    func encode(_ input: String) async throws -> MemoryBatch
 }
