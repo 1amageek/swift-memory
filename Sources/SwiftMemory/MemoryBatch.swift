@@ -1,54 +1,41 @@
 // MemoryBatch.swift
-// Atomic unit produced by MemoryEncoding — fully Codable for LLM JSON output
+// Result of MemoryEncoding interpretation
 
 import Foundation
+import Database
 
-/// The result of encoding input — Givens, Entities, and Statements.
+/// The result of MemoryEncoding interpretation.
 ///
-/// Fully `Codable` so it can be decoded directly from LLM JSON output.
-/// `Memory` converts these records into `@Persistable` objects and
-/// RDF triples during persistence.
-public struct MemoryBatch: Sendable, Codable {
+/// Contains typed @OWLClass entities and explicit relationship statements.
+/// NOT Codable — MemoryEncoding implementation handles JSON decode internally.
+public struct MemoryBatch: Sendable {
 
-    /// Raw sensory materials.
-    public var givens: [GivenRecord]
+    /// Typed @OWLClass entities to insert.
+    /// OntologyIndex auto-syncs rdf:type + @OWLDataProperty triples on insert.
+    public var entities: [any Persistable & Sendable]
 
-    /// Entity records (type + name + properties).
-    /// Memory converts these to @OWLClass records + rdf:type/rdfs:label triples.
-    public var entities: [EntityRecord]
-
-    /// Relationship triples (subject, predicate, object).
+    /// Explicit relationship triples beyond what OntologyIndex generates.
+    /// e.g. ("Alice", "ex:worksAt", "Acme") — inter-entity relationships.
     public var statements: [StatementRecord]
 
-    public static let empty = MemoryBatch(givens: [], entities: [], statements: [])
+    public static let empty = MemoryBatch(entities: [], statements: [])
 
     public init(
-        givens: [GivenRecord] = [],
-        entities: [EntityRecord] = [],
+        entities: [any Persistable & Sendable] = [],
         statements: [StatementRecord] = []
     ) {
-        self.givens = givens
         self.entities = entities
         self.statements = statements
     }
 
     // MARK: - Builder Methods
 
-    /// Add raw text as Given material.
-    public mutating func given(_ text: String, source: String = "text") {
-        givens.append(GivenRecord(text: text, source: source))
+    /// Add a typed @OWLClass entity.
+    public mutating func entity(_ entity: some Persistable & Sendable) {
+        entities.append(entity)
     }
 
-    /// Add an entity.
-    public mutating func entity(
-        type: String,
-        name: String,
-        properties: [String: String] = [:]
-    ) {
-        entities.append(EntityRecord(type: type, name: name, properties: properties))
-    }
-
-    /// Add a relationship triple.
+    /// Add an explicit relationship triple.
     public mutating func triple(
         _ subject: String,
         _ predicate: String,
@@ -61,55 +48,18 @@ public struct MemoryBatch: Sendable, Codable {
 
     public func merging(_ other: MemoryBatch) -> MemoryBatch {
         MemoryBatch(
-            givens: givens + other.givens,
             entities: entities + other.entities,
             statements: statements + other.statements
         )
     }
 }
 
-// MARK: - Records
+// MARK: - Statement Record
 
-/// Raw sensory material record.
-public struct GivenRecord: Sendable, Codable, Hashable {
-    /// Text content.
-    public var text: String
-    /// Source identifier (e.g. "chat", "mail", "file").
-    public var source: String
-
-    public init(text: String, source: String = "text") {
-        self.text = text
-        self.source = source
-    }
-}
-
-/// Entity record — describes an entity to create or update.
+/// Explicit relationship triple (subject, predicate, object).
 ///
-/// LLM outputs this directly:
-/// ```json
-/// {"type": "Person", "name": "Alice", "properties": {"email": "alice@acme.com"}}
-/// ```
-public struct EntityRecord: Sendable, Codable, Hashable {
-    /// OWL class name (e.g. "Person", "Organization").
-    public var type: String
-    /// Entity display name (becomes rdfs:label).
-    public var name: String
-    /// Additional properties as key-value pairs (e.g. {"email": "alice@acme.com"}).
-    public var properties: [String: String]
-
-    public init(type: String, name: String, properties: [String: String] = [:]) {
-        self.type = type
-        self.name = name
-        self.properties = properties
-    }
-}
-
-/// Relationship triple record.
-///
-/// LLM outputs this directly:
-/// ```json
-/// {"subject": "Alice", "predicate": "ex:worksAt", "object": "Acme Corp"}
-/// ```
+/// Used for inter-entity relationships that OntologyIndex
+/// does not auto-generate (e.g. "Alice worksAt Acme").
 public struct StatementRecord: Sendable, Codable, Hashable {
     public var subject: String
     public var predicate: String

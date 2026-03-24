@@ -7,10 +7,9 @@ import MemoryOntology
 
 /// Knowledge persistence system for LLM agents.
 ///
-/// Stores **Given** (raw materials), **@OWLClass entities** (typed records),
-/// and **Statements** (RDF triples). The Concept Protocol (`MemoryEncoding`)
-/// is external — the client provides an LLM-powered implementation that
-/// interprets input and produces a `MemoryBatch`.
+/// Stores **Given** (raw materials), interprets them via **MemoryEncoding**
+/// (LLM-powered), and persists structured knowledge as **@OWLClass entities**
+/// and **Statement triples**.
 ///
 /// ```swift
 /// let memory = try await Memory(
@@ -19,7 +18,10 @@ import MemoryOntology
 ///     entityTypes: [Person.self, Organization.self]
 /// )
 ///
+/// // Bob passes conversation text — Memory handles the rest
 /// try await memory.store("Alice works at Acme Corp")
+///
+/// // Recall by keywords
 /// let result = try await memory.recall(keywords: ["Alice"])
 /// ```
 public actor Memory {
@@ -33,13 +35,6 @@ public actor Memory {
     public nonisolated let ontologyPolicy: any OntologyPolicy
 
     /// Initialize Memory with SQLite persistence.
-    ///
-    /// - Parameters:
-    ///   - path: SQLite file path. Pass `nil` for in-memory (testing).
-    ///   - encoding: Concept Protocol implementation (LLM-powered).
-    ///   - entityTypes: `@OWLClass` Persistable types to register.
-    ///   - ontologyPolicy: Ontology policy for validation. Defaults to `DefaultOntologyPolicy`.
-    ///   - graphName: Named graph for this memory instance.
     public init(
         path: String?,
         encoding: any MemoryEncoding,
@@ -72,85 +67,75 @@ public actor Memory {
 
     // MARK: - Store
 
-    /// Store input through the Concept Protocol.
+    /// Store input through the full pipeline.
     ///
-    /// 1. `encoding.encode(input)` — LLM interprets and produces MemoryBatch
-    /// 2. Memory deduplicates entities (recall by label + type → upsert)
-    /// 3. Persists Givens, Entities, and Statements atomically
-    public func store(_ input: String) async throws {
-        let batch = try await encoding.encode(input)
-        try await persist(batch)
-    }
+    /// 1. `input.encode(to: encoder)` → Given records
+    /// 2. Given records saved to DB
+    /// 3. `encoding.interpret(givens)` → MemoryBatch (entities + statements)
+    /// 4. Entities inserted → OntologyIndex auto-syncs triples
+    /// 5. Explicit statements inserted
+    /// 6. Atomic save
+    public func store(_ input: any MemoryEncodable) async throws {
+        // Step 1: Encode input to Given materials
+        let encoder = DefaultMemoryEncoder()
+        try input.encode(to: encoder)
+        let materials = encoder.givenContainer().collectMaterials()
 
-    /// Store a pre-built MemoryBatch directly.
-    ///
-    /// Use when the caller has already constructed the batch
-    /// (e.g. from parsed Claude output).
-    public func store(_ batch: MemoryBatch) async throws {
-        try await persist(batch)
-    }
-
-    private func persist(_ batch: MemoryBatch) async throws {
-
-        // Givens → Given @Persistable records
-        for record in batch.givens {
-            var given = Given(
-                modality: "text",
-                payloadRef: record.text,
+        // Step 2: Save Givens to DB
+        var givens: [Given] = []
+        for material in materials {
+            let given = Given(
+                modality: material.modality,
+                payloadRef: material.text,
                 embedding: [Float](repeating: 0, count: 384),
                 timestamp: Date(),
-                source: record.source
+                source: material.source
             )
             context.fdbContext.insert(given)
+            givens.append(given)
         }
 
-        // Entities → rdf:type + rdfs:label + property triples
+        // Step 3: Interpret via MemoryEncoding (LLM)
+        let batch = try await encoding.interpret(givens)
+
+        // Step 4: Persist entities (OntologyIndex auto-syncs triples)
         for entity in batch.entities {
-            let iri = "memory:\(entity.type.lowercased())/\(entity.name.lowercased().replacingOccurrences(of: " ", with: "_"))"
-            context.fdbContext.insert(Statement(
-                graph: context.graphName, subject: iri, predicate: "rdf:type", object: "ex:\(entity.type)"
-            ))
-            context.fdbContext.insert(Statement(
-                graph: context.graphName, subject: iri, predicate: "rdfs:label", object: entity.name
-            ))
-            for (key, value) in entity.properties {
-                context.fdbContext.insert(Statement(
-                    graph: context.graphName, subject: iri, predicate: key, object: value
-                ))
-            }
+            context.fdbContext.insert(entity)
         }
 
-        // Statements → Statement @Persistable records
+        // Step 5: Persist explicit relationship statements
         for record in batch.statements {
-            let subject = resolveIRI(record.subject, entities: batch.entities)
-            let object = resolveIRI(record.object, entities: batch.entities)
             context.fdbContext.insert(Statement(
                 graph: context.graphName,
-                subject: subject,
+                subject: record.subject,
                 predicate: record.predicate,
-                object: object
+                object: record.object
             ))
         }
 
+        // Step 6: Atomic save
         try await context.fdbContext.save()
     }
 
-    /// Resolve a name or IRI. If it matches an entity name, return its IRI.
-    private func resolveIRI(_ value: String, entities: [EntityRecord]) -> String {
-        // Already an IRI
-        if value.contains(":") { return value }
-        // Look up by name in entities
-        if let entity = entities.first(where: { $0.name == value }) {
-            return "memory:\(entity.type.lowercased())/\(value.lowercased().replacingOccurrences(of: " ", with: "_"))"
+    /// Store a pre-built MemoryBatch directly (skip Given/interpret).
+    public func store(_ batch: MemoryBatch) async throws {
+        for entity in batch.entities {
+            context.fdbContext.insert(entity)
         }
-        return value
+        for record in batch.statements {
+            context.fdbContext.insert(Statement(
+                graph: context.graphName,
+                subject: record.subject,
+                predicate: record.predicate,
+                object: record.object
+            ))
+        }
+        try await context.fdbContext.save()
     }
 
     // MARK: - Recall
 
     /// Recall relevant entities from memory by keywords.
-    ///
-    /// Uses spreading activation on the knowledge graph.
     public func recall(keywords: [String], maxHops: Int = 2, limit: Int = 20) async throws -> RecallResult {
         try await recallEngine.execute(RecallQuery(keywords: keywords, maxHops: maxHops, limit: limit))
     }

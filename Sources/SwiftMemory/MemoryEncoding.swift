@@ -1,27 +1,27 @@
 // MemoryEncoding.swift
-// Concept Protocol — interprets input and produces MemoryBatch
+// Concept Protocol — interprets Givens and produces structured knowledge
 
-/// The Concept Protocol.
+/// The Concept Protocol — interprets Givens and produces structured knowledge.
 ///
-/// Implementations (LLM, VLM, rules, etc.) are provided by the **client**.
-/// Given raw input, the encoding interprets it and produces a `MemoryBatch`
-/// containing Givens (raw materials), Entities (@OWLClass records),
-/// and Statements (RDF triples).
+/// Memory delegates interpretation to this protocol. The client
+/// implements it by calling an LLM or other analysis system.
 ///
 /// ```swift
 /// struct MyEncoding: MemoryEncoding {
-///     func encode(_ input: String) async throws -> MemoryBatch {
-///         let analysis = await llm.analyze(input)
+///     func interpret(_ givens: [Given]) async throws -> MemoryBatch {
 ///         var batch = MemoryBatch()
-///         batch.given(input, source: "chat")
-///         batch.entity(Person(name: analysis.personName))
-///         batch.triple(personIRI, "ex:worksAt", orgIRI)
+///         for given in givens where given.modality == "text" {
+///             let analysis = await llm.analyze(given.payloadRef)
+///             batch.entity(Person(name: analysis.name))
+///             batch.triple(personIRI, "ex:worksAt", orgIRI)
+///         }
 ///         return batch
 ///     }
 /// }
 /// ```
 public protocol MemoryEncoding: Sendable {
-
-    /// Interpret input and produce a batch of materials to persist.
-    func encode(_ input: String) async throws -> MemoryBatch
+    /// Interpret saved Givens and return structured knowledge.
+    ///
+    /// Called by Memory after Givens are persisted.
+    func interpret(_ givens: [Given]) async throws -> MemoryBatch
 }
