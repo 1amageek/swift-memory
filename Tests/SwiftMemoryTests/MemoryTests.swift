@@ -35,24 +35,23 @@ struct MemoryTests {
     }
 
     @Test
-    func givenContainer() {
-        let container = GivenContainer()
-        container.encode("hello", source: "test")
-        container.encode(imageRef: "img://abc", source: "test")
-        let materials = container.collectMaterials()
-        #expect(materials.count == 2)
-        #expect(materials[0].modality == "text")
-        #expect(materials[1].modality == "image")
+    func givenRepresentable() {
+        let content = "Hello world".givenRepresentation
+        #expect(content.components.count == 1)
+        if case .text(let text) = content.components[0] {
+            #expect(text.value == "Hello world")
+        } else {
+            Issue.record("Expected text component")
+        }
     }
 
     @Test
-    func stringMemoryEncodable() throws {
-        let encoder = DefaultMemoryEncoder()
-        try "Hello world".encode(to: encoder)
-        let materials = encoder.givenContainer().collectMaterials()
-        #expect(materials.count == 1)
-        #expect(materials[0].text == "Hello world")
-        #expect(materials[0].source == "text")
+    func givenContentMultimodal() {
+        let content = GivenContent(components: [
+            .text(GivenContent.Text(value: "hello")),
+            .image(GivenContent.Image(source: .url(URL(string: "https://example.com/img.png")!))),
+        ])
+        #expect(content.components.count == 2)
     }
 
     @Test

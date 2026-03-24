@@ -6,22 +6,25 @@ import Database
 
 /// Encoding that does nothing — returns empty batch.
 struct PassthroughEncoding: MemoryEncoding {
-    func interpret(_ materials: [GivenContainer.Material]) async throws -> MemoryBatch {
+    func interpret(_ input: any GivenRepresentable) async throws -> MemoryBatch {
         MemoryBatch.empty
     }
 }
 
-/// Encoding that creates Statement triples from material text.
+/// Encoding that creates Statement triples from input text.
 /// Parses "triple:s,p,o" patterns.
 struct TripleEncoding: MemoryEncoding {
-    func interpret(_ materials: [GivenContainer.Material]) async throws -> MemoryBatch {
+    func interpret(_ input: any GivenRepresentable) async throws -> MemoryBatch {
         var batch = MemoryBatch()
-        for material in materials where material.modality == "text" {
-            for line in material.text.split(separator: ";").map({ $0.trimmingCharacters(in: .whitespaces) }) {
-                if line.hasPrefix("triple:") {
-                    let parts = line.dropFirst("triple:".count).split(separator: ",")
-                    if parts.count == 3 {
-                        batch.triple(String(parts[0]), String(parts[1]), String(parts[2]))
+        let content = input.givenRepresentation
+        for component in content.components {
+            if case .text(let text) = component {
+                for line in text.value.split(separator: ";").map({ $0.trimmingCharacters(in: .whitespaces) }) {
+                    if line.hasPrefix("triple:") {
+                        let parts = line.dropFirst("triple:".count).split(separator: ",")
+                        if parts.count == 3 {
+                            batch.triple(String(parts[0]), String(parts[1]), String(parts[2]))
+                        }
                     }
                 }
             }

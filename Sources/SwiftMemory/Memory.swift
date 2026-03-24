@@ -7,10 +7,6 @@ import MemoryOntology
 
 /// Knowledge persistence system for LLM agents.
 ///
-/// Stores **Given** (raw materials), interprets them via **MemoryEncoding**
-/// (LLM-powered), and persists structured knowledge as **@OWLClass entities**
-/// and **Statement triples**.
-///
 /// ```swift
 /// let memory = try await Memory(
 ///     path: "memory.sqlite",
@@ -18,10 +14,7 @@ import MemoryOntology
 ///     entityTypes: [Person.self, Organization.self]
 /// )
 ///
-/// // Bob passes conversation text — Memory handles the rest
 /// try await memory.store("Alice works at Acme Corp")
-///
-/// // Recall by keywords
 /// let result = try await memory.recall(keywords: ["Alice"])
 /// ```
 public actor Memory {
@@ -31,13 +24,9 @@ public actor Memory {
     private let encoding: any MemoryEncoding
     private let recallEngine: RecallEngine
 
-    /// The ontology policy governing class/property validation.
     public nonisolated let ontologyPolicy: any OntologyPolicy
-
-    /// Registry for decoding LLM JSON output into concrete @OWLClass types.
     public nonisolated let entityRegistry: EntityRegistry
 
-    /// Initialize Memory with SQLite persistence.
     public init(
         path: String?,
         encoding: any MemoryEncoding,
@@ -73,42 +62,53 @@ public actor Memory {
 
     /// Store input through the full pipeline.
     ///
-    /// 1. `input.encode(to: encoder)` → Given records
-    /// 2. Given records saved to DB
-    /// 3. `encoding.interpret(givens)` → MemoryBatch (entities + statements)
-    /// 4. Entities inserted → OntologyIndex auto-syncs triples
-    /// 5. Explicit statements inserted
+    /// 1. LLM interprets input via MemoryEncoding
+    /// 2. If batch is empty → discard (nothing worth remembering)
+    /// 3. Save input as Given (LLM found knowledge)
+    /// 4. Insert entities → OntologyIndex auto-syncs triples
+    /// 5. Insert explicit statements
     /// 6. Atomic save
-    public func store(_ input: any MemoryEncodable) async throws {
-        // Step 1: Encode input to raw materials (not persisted yet)
-        let encoder = DefaultMemoryEncoder()
-        try input.encode(to: encoder)
-        let materials = encoder.givenContainer().collectMaterials()
-        guard !materials.isEmpty else { return }
-
-        // Step 2: LLM interprets raw materials
-        let batch = try await encoding.interpret(materials)
-
-        // Step 3: If nothing worth remembering, discard
+    public func store(_ input: any GivenRepresentable) async throws {
+        let batch = try await encoding.interpret(input)
         guard !batch.entities.isEmpty || !batch.statements.isEmpty else { return }
 
-        // Step 4: Save raw materials as Given (LLM found something worth keeping)
-        for material in materials {
+        // Save input as Given
+        let content = input.givenRepresentation
+        for component in content.components {
+            let modality: String
+            let payloadRef: String
+            switch component {
+            case .text(let text):
+                modality = "text"
+                payloadRef = text.value
+            case .image(let image):
+                modality = "image"
+                switch image.source {
+                case .base64(let data, _): payloadRef = data
+                case .url(let url): payloadRef = url.absoluteString
+                }
+            case .audio(let audio):
+                modality = "audio"
+                switch audio.source {
+                case .base64(let data, _): payloadRef = data
+                case .url(let url): payloadRef = url.absoluteString
+                }
+            }
             context.fdbContext.insert(Given(
-                modality: material.modality,
-                payloadRef: material.text,
+                modality: modality,
+                payloadRef: payloadRef,
                 embedding: [Float](repeating: 0, count: 384),
                 timestamp: Date(),
-                source: material.source
+                source: "given"
             ))
         }
 
-        // Step 5: Persist entities (OntologyIndex auto-syncs triples)
+        // Persist entities
         for entity in batch.entities {
             context.fdbContext.insert(entity)
         }
 
-        // Step 6: Persist explicit relationship statements
+        // Persist explicit statements
         for record in batch.statements {
             context.fdbContext.insert(Statement(
                 graph: context.graphName,
@@ -118,12 +118,12 @@ public actor Memory {
             ))
         }
 
-        // Step 7: Atomic save
         try await context.fdbContext.save()
     }
 
-    /// Store a pre-built MemoryBatch directly (skip Given/interpret).
+    /// Store a pre-built MemoryBatch directly.
     public func store(_ batch: MemoryBatch) async throws {
+        guard !batch.entities.isEmpty || !batch.statements.isEmpty else { return }
         for entity in batch.entities {
             context.fdbContext.insert(entity)
         }
@@ -140,12 +140,10 @@ public actor Memory {
 
     // MARK: - Recall
 
-    /// Recall relevant entities from memory by keywords.
     public func recall(keywords: [String], maxHops: Int = 2, limit: Int = 20) async throws -> RecallResult {
         try await recallEngine.execute(RecallQuery(keywords: keywords, maxHops: maxHops, limit: limit))
     }
 
-    /// Recall with a full query.
     public func recall(_ query: RecallQuery) async throws -> RecallResult {
         try await recallEngine.execute(query)
     }
