@@ -30,7 +30,7 @@ public actor Memory {
     private let recallEngine: RecallEngine
 
     /// The ontology policy governing class/property validation.
-    public let ontologyPolicy: any OntologyPolicy
+    public nonisolated let ontologyPolicy: any OntologyPolicy
 
     /// Initialize Memory with SQLite persistence.
     ///
@@ -92,8 +92,11 @@ public actor Memory {
 
     private func persist(_ batch: MemoryBatch) async throws {
 
-        // Givens
-        for given in batch.givens {
+        // Givens — fill zero embedding if empty (vector index requires 384 dims)
+        for var given in batch.givens {
+            if given.embedding.isEmpty {
+                given.embedding = [Float](repeating: 0, count: 384)
+            }
             context.fdbContext.insert(given)
         }
 
