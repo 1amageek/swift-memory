@@ -56,6 +56,11 @@ public struct GivenContent: Sendable, Equatable {
         self.components = components
     }
 
+    public init(@GivenBuilder _ content: () throws -> GivenContent) rethrows {
+        let built = try content()
+        self.components = built.components
+    }
+
     public var givenRepresentation: GivenContent {
         return self
     }
