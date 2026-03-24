@@ -41,7 +41,7 @@ public actor Memory {
     public init(
         path: String?,
         encoding: any MemoryEncoding,
-        entityTypes: [any (Persistable & Codable & Sendable).Type] = [],
+        entityTypes: [any Persistable.Type] = [],
         ontologyPolicy: any OntologyPolicy = DefaultOntologyPolicy(),
         graphName: String = "memory:default"
     ) async throws {

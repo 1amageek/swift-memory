@@ -22,7 +22,7 @@ public final class EntityRegistry: Sendable {
 
     private let decoders: [String: @Sendable (Data) throws -> any Persistable & Sendable]
 
-    public init(_ types: [any (Persistable & Codable & Sendable).Type]) {
+    public init(_ types: [any (Persistable).Type]) {
         var map: [String: @Sendable (Data) throws -> any Persistable & Sendable] = [:]
         for type in types {
             Self.register(type, into: &map)
@@ -30,7 +30,7 @@ public final class EntityRegistry: Sendable {
         self.decoders = map
     }
 
-    private static func register<T: Persistable & Codable & Sendable>(
+    private static func register<T: Persistable>(
         _ type: T.Type,
         into map: inout [String: @Sendable (Data) throws -> any Persistable & Sendable]
     ) {
