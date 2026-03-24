@@ -10,10 +10,11 @@ import Synchronization
 /// to submit raw materials (text, image refs, audio refs).
 public final class GivenContainer: Sendable {
 
-    struct Material: Sendable {
-        var text: String
-        var modality: String
-        var source: String
+    /// Raw material submitted during encoding. Not yet persisted.
+    public struct Material: Sendable {
+        public var text: String
+        public var modality: String
+        public var source: String
     }
 
     private let state = Mutex<[Material]>([])

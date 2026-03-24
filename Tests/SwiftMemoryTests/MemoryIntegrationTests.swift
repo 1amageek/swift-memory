@@ -6,18 +6,18 @@ import Database
 
 /// Encoding that does nothing — returns empty batch.
 struct PassthroughEncoding: MemoryEncoding {
-    func interpret(_ givens: [Given]) async throws -> MemoryBatch {
+    func interpret(_ materials: [GivenContainer.Material]) async throws -> MemoryBatch {
         MemoryBatch.empty
     }
 }
 
-/// Encoding that creates Statement triples from Given text.
-/// Parses "triple:s,p,o" patterns from Given payloads.
+/// Encoding that creates Statement triples from material text.
+/// Parses "triple:s,p,o" patterns.
 struct TripleEncoding: MemoryEncoding {
-    func interpret(_ givens: [Given]) async throws -> MemoryBatch {
+    func interpret(_ materials: [GivenContainer.Material]) async throws -> MemoryBatch {
         var batch = MemoryBatch()
-        for given in givens where given.modality == "text" {
-            for line in given.payloadRef.split(separator: ";").map({ $0.trimmingCharacters(in: .whitespaces) }) {
+        for material in materials where material.modality == "text" {
+            for line in material.text.split(separator: ";").map({ $0.trimmingCharacters(in: .whitespaces) }) {
                 if line.hasPrefix("triple:") {
                     let parts = line.dropFirst("triple:".count).split(separator: ",")
                     if parts.count == 3 {
@@ -33,11 +33,11 @@ struct TripleEncoding: MemoryEncoding {
 @Suite("Memory Integration Tests", .serialized)
 struct MemoryIntegrationTests {
 
-    @Test("Store text saves Given")
-    func storeTextSavesGiven() async throws {
+    @Test("Store with empty batch discards materials")
+    func storeEmptyBatchDiscardsGivens() async throws {
         let memory = try await Memory(path: nil, encoding: PassthroughEncoding())
         try await memory.store("Cherry blossoms are beautiful")
-        // No crash = Given was saved successfully
+        // PassthroughEncoding returns empty → materials discarded, nothing saved
     }
 
     @Test("Store and recall via triples")

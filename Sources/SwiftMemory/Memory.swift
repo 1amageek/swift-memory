@@ -80,34 +80,35 @@ public actor Memory {
     /// 5. Explicit statements inserted
     /// 6. Atomic save
     public func store(_ input: any MemoryEncodable) async throws {
-        // Step 1: Encode input to Given materials
+        // Step 1: Encode input to raw materials (not persisted yet)
         let encoder = DefaultMemoryEncoder()
         try input.encode(to: encoder)
         let materials = encoder.givenContainer().collectMaterials()
+        guard !materials.isEmpty else { return }
 
-        // Step 2: Save Givens to DB
-        var givens: [Given] = []
+        // Step 2: LLM interprets raw materials
+        let batch = try await encoding.interpret(materials)
+
+        // Step 3: If nothing worth remembering, discard
+        guard !batch.entities.isEmpty || !batch.statements.isEmpty else { return }
+
+        // Step 4: Save raw materials as Given (LLM found something worth keeping)
         for material in materials {
-            let given = Given(
+            context.fdbContext.insert(Given(
                 modality: material.modality,
                 payloadRef: material.text,
                 embedding: [Float](repeating: 0, count: 384),
                 timestamp: Date(),
                 source: material.source
-            )
-            context.fdbContext.insert(given)
-            givens.append(given)
+            ))
         }
 
-        // Step 3: Interpret via MemoryEncoding (LLM)
-        let batch = try await encoding.interpret(givens)
-
-        // Step 4: Persist entities (OntologyIndex auto-syncs triples)
+        // Step 5: Persist entities (OntologyIndex auto-syncs triples)
         for entity in batch.entities {
             context.fdbContext.insert(entity)
         }
 
-        // Step 5: Persist explicit relationship statements
+        // Step 6: Persist explicit relationship statements
         for record in batch.statements {
             context.fdbContext.insert(Statement(
                 graph: context.graphName,
@@ -117,7 +118,7 @@ public actor Memory {
             ))
         }
 
-        // Step 6: Atomic save
+        // Step 7: Atomic save
         try await context.fdbContext.save()
     }
 

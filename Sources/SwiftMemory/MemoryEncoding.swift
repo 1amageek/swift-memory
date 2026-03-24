@@ -1,27 +1,21 @@
 // MemoryEncoding.swift
-// Concept Protocol — interprets Givens and produces structured knowledge
+// Concept Protocol — interprets raw materials and produces structured knowledge
 
-/// The Concept Protocol — interprets Givens and produces structured knowledge.
+/// The Concept Protocol — interprets raw materials and produces structured knowledge.
 ///
 /// Memory delegates interpretation to this protocol. The client
 /// implements it by calling an LLM or other analysis system.
 ///
-/// ```swift
-/// struct MyEncoding: MemoryEncoding {
-///     func interpret(_ givens: [Given]) async throws -> MemoryBatch {
-///         var batch = MemoryBatch()
-///         for given in givens where given.modality == "text" {
-///             let analysis = await llm.analyze(given.payloadRef)
-///             batch.entity(Person(name: analysis.name))
-///             batch.triple(personIRI, "ex:worksAt", orgIRI)
-///         }
-///         return batch
-///     }
-/// }
-/// ```
+/// Receives raw materials (not yet persisted). Returns a MemoryBatch.
+/// If the batch is non-empty, Memory saves both the materials as Given
+/// and the extracted knowledge. If empty, materials are discarded.
 public protocol MemoryEncoding: Sendable {
-    /// Interpret saved Givens and return structured knowledge.
+    /// Interpret raw materials and return structured knowledge.
     ///
-    /// Called by Memory after Givens are persisted.
-    func interpret(_ givens: [Given]) async throws -> MemoryBatch
+    /// - Parameter materials: Raw materials from MemoryEncodable.encode(to:).
+    ///   These are NOT yet saved — Memory decides based on the result.
+    /// - Returns: MemoryBatch with entities + statements.
+    ///   Empty batch → materials discarded (nothing worth remembering).
+    ///   Non-empty → materials saved as Given + knowledge persisted.
+    func interpret(_ materials: [GivenContainer.Material]) async throws -> MemoryBatch
 }
