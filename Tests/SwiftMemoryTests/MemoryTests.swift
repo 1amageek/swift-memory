@@ -1,5 +1,5 @@
 import Testing
-import Memory
+import SwiftMemory
 
 @Suite
 struct MemoryTests {

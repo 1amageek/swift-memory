@@ -3,10 +3,10 @@
 import PackageDescription
 
 let package = Package(
-    name: "Memory",
+    name: "swift-memory",
     platforms: [.macOS(.v26)],
     products: [
-        .library(name: "Memory", targets: ["Memory"]),
+        .library(name: "SwiftMemory", targets: ["SwiftMemory"]),
     ],
     dependencies: [
         .package(
@@ -25,15 +25,15 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "Memory",
+            name: "SwiftMemory",
             dependencies: [
                 .product(name: "FDBite", package: "database-framework"),
                 .product(name: "Hoot", package: "swift-hoot"),
             ]
         ),
         .testTarget(
-            name: "MemoryTests",
-            dependencies: ["Memory"]
+            name: "SwiftMemoryTests",
+            dependencies: ["SwiftMemory"]
         ),
     ],
     swiftLanguageModes: [.v6]
