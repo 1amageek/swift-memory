@@ -2,7 +2,7 @@
 // Spreading activation associative memory recall
 
 import Foundation
-import FDBite
+import Database
 
 /// Recall Engine — spreading activation over the knowledge graph.
 ///

@@ -1,7 +1,7 @@
 // MemoryContext.swift
 // Context for Memory operations
 
-import FDBite
+import Database
 
 /// Context providing FDB access for Memory operations.
 public struct MemoryContext: Sendable {

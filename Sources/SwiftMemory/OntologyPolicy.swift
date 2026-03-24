@@ -1,7 +1,7 @@
 // OntologyPolicy.swift
 // Write/Read 共通のオントロジー設計方針
 
-import FDBite
+import Database
 import Hoot
 
 /// オントロジー設計方針

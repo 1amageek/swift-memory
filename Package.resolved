@@ -1,5 +1,5 @@
 {
-  "originHash" : "35da4b040651d70651eccf9b5df963b20a7573fd757e2d26bbd7e829b448ef29",
+  "originHash" : "b5f19d695507e7c94d5275391f51bb436c4e40ffdca784b97ef6dde2041f31df",
   "pins" : [
     {
       "identity" : "database-framework",
@@ -7,7 +7,7 @@
       "location" : "https://github.com/1amageek/database-framework.git",
       "state" : {
         "branch" : "main",
-        "revision" : "b3fdcdc5583118c5d3dfc5bff8b22420ffe0fd40"
+        "revision" : "534a9b5063a7c5060d9104cfed1ae5dcd5d89487"
       }
     },
     {
@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/database-kit.git",
       "state" : {
-        "branch" : "main",
-        "revision" : "9f690d7e743a86e7d861ed9507617689fcb392c6"
+        "revision" : "1e54af6e07d5e2cd7efb73cb08abe0308a6ae382",
+        "version" : "26.324.0"
       }
     },
     {
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/fdb-swift-bindings.git",
       "state" : {
-        "branch" : "feature/directory-layer",
-        "revision" : "e871f1e910edc45b999c450a42f13aa5f56dc8be"
+        "revision" : "cfa638d6801ebf1853278b5884564949c40be4fa",
+        "version" : "0.1.0"
       }
     },
     {
@@ -42,8 +42,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/storage-kit.git",
       "state" : {
-        "branch" : "main",
-        "revision" : "e2d22e9c918c3013bcaa252c85896e693adb2f01"
+        "revision" : "a92f62eeb7084b92618869334f3a73ac52e98ac0",
+        "version" : "26.324.1"
       }
     },
     {
@@ -85,7 +85,7 @@
     {
       "identity" : "swift-collections",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/apple/swift-collections.git",
+      "location" : "https://github.com/apple/swift-collections",
       "state" : {
         "revision" : "6675bc0ff86e61436e615df6fc5174e043e57924",
         "version" : "1.4.1"
@@ -193,7 +193,7 @@
     {
       "identity" : "swift-system",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/apple/swift-system.git",
+      "location" : "https://github.com/apple/swift-system",
       "state" : {
         "revision" : "7c6ad0fc39d0763e0b699210e4124afd5041c5df",
         "version" : "1.6.4"

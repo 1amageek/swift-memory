@@ -2,7 +2,7 @@
 // Public API: store / recall
 
 import Foundation
-import FDBite
+import Database
 
 /// Knowledge persistence system for LLM agents.
 ///

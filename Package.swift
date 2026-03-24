@@ -10,13 +10,9 @@ let package = Package(
     ],
     dependencies: [
         .package(
-            url: "https://github.com/1amageek/database-kit.git",
-            branch: "main"
-        ),
-        .package(
             url: "https://github.com/1amageek/database-framework.git",
             branch: "main",
-            traits: ["FDBite"]
+            traits: ["SQLite"]
         ),
         .package(
             url: "https://github.com/hoot-format/swift-hoot.git",
@@ -27,7 +23,7 @@ let package = Package(
         .target(
             name: "SwiftMemory",
             dependencies: [
-                .product(name: "FDBite", package: "database-framework"),
+                .product(name: "Database", package: "database-framework"),
                 .product(name: "Hoot", package: "swift-hoot"),
             ]
         ),

@@ -2,7 +2,7 @@
 // RDF Triple persistence model (adapted from AURORA)
 
 import Foundation
-import FDBite
+import Database
 
 /// An RDF triple stored in the knowledge graph.
 ///

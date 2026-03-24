@@ -1,7 +1,7 @@
 // OWLOntology+Hoot.swift
 // OWLOntology → HOOT format conversion (from AURORA)
 
-import FDBite
+import Database
 import Hoot
 
 extension OWLOntology {

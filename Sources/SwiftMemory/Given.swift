@@ -2,7 +2,7 @@
 // Sensory data with vector embedding
 
 import Foundation
-import FDBite
+import Database
 
 /// A unit of sensory input selected by MemoryEncoder as worth remembering.
 ///
