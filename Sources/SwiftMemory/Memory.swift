@@ -34,15 +34,19 @@ public actor Memory {
     /// The ontology policy governing class/property validation.
     public nonisolated let ontologyPolicy: any OntologyPolicy
 
+    /// Registry for decoding LLM JSON output into concrete @OWLClass types.
+    public nonisolated let entityRegistry: EntityRegistry
+
     /// Initialize Memory with SQLite persistence.
     public init(
         path: String?,
         encoding: any MemoryEncoding,
-        entityTypes: [any Persistable.Type] = [],
+        entityTypes: [any (Persistable & Codable & Sendable).Type] = [],
         ontologyPolicy: any OntologyPolicy = DefaultOntologyPolicy(),
         graphName: String = "memory:default"
     ) async throws {
         self.ontologyPolicy = ontologyPolicy
+        self.entityRegistry = EntityRegistry(entityTypes)
 
         let allTypes: [any Persistable.Type] = [Given.self, Statement.self] + entityTypes
         let schema = Schema(allTypes, version: Schema.Version(1, 0, 0))
