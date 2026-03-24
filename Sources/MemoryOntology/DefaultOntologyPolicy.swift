@@ -509,233 +509,232 @@ public struct DefaultOntologyPolicy: OntologyPolicy, Sendable {
 
     public var definition: String {
         """
-    # オントロジー設計方針
+    # Ontology Design Policy
 
     ## Predicate Archetypes
     mereology | location | association | participation |
     causation | dependency | reference | identity | provenance | temporal
 
-    ## 述語命名テンプレート
-    - hasX / isXOf（一般）
-    - partOf / hasPart（mereology）
-    - locatedIn（location）
-    - affiliatedWith / associatedWith（association）
-    - participatesIn / hasParticipant（participation）
-    - causes / causedBy / affects（causation）
-    - dependsOn / requires（dependency）
-    - refersTo / mentions（reference）
-    - sameAs / exactMatch / closeMatch（identity）
-    - derivedFrom / hasSource（provenance）
-    - date / time / startDate / endDate（temporal）
+    ## Predicate Naming Templates
+    - hasX / isXOf (general)
+    - partOf / hasPart (mereology)
+    - locatedIn (location)
+    - affiliatedWith / associatedWith (association)
+    - participatesIn / hasParticipant (participation)
+    - causes / causedBy / affects (causation)
+    - dependsOn / requires (dependency)
+    - refersTo / mentions (reference)
+    - sameAs / exactMatch / closeMatch (identity)
+    - derivedFrom / hasSource (provenance)
+    - date / time / startDate / endDate (temporal)
 
-    ## クラスか属性かの判断基準
+    ## When to Create a Subclass
 
-    サブクラスを作る唯一の理由は、そのグループに固有のプロパティ（domain）が存在することである。
-    親クラスにないプロパティを持つか？ YES → サブクラス。NO → 属性値・関係・Defined Class で表現する。
+    The only reason to create a subclass is when the group has domain-specific properties.
+    Does it have properties the parent doesn't? YES → subclass. NO → use attribute values, relationships, or Defined Class.
 
-    ## クラス階層
-    - 意味のある抽象度でクラスを定義する
-    - 親クラスは子クラスの共通性質を捉える
-    - すべてのクラスは「利用可能なクラス一覧」のいずれかに接続する
+    ## Class Hierarchy
+    - Define classes at meaningful levels of abstraction
+    - Parent classes capture shared properties of children
+    - All classes must connect to one of the available classes below
 
-    ## 利用可能なクラス一覧
+    ## Available Classes
 
-    以下はすべて定義済み。define_ontology での再定義は不要。
-    新規クラスは最も具体的な既存クラスを superClasses に指定する。
-    既存クラスで rdf:type を付与できるなら新規クラスは作成しない。
+    All listed below are pre-defined. Do not redefine them.
+    New classes must specify the most specific existing class as superClass.
+    If an existing class can serve as rdf:type, do not create a new one.
 
-    ### 上位オントロジー（シード）
+    ### Upper Ontology (Seed)
 
     \(upperOntologyText)
 
-    ## プロパティ設計
-    - オブジェクトプロパティ: エンティティ間の関係
-    - データプロパティ: 属性値
-    - domain/range はシステムが管理する。define_ontology では設定不要・設定不可
+    ## Property Design
+    - Object properties: relationships between entities
+    - Data properties: attribute values
+    - domain/range are managed by the system. Do not set them manually.
 
-    ### オブジェクトプロパティの命名規約
-    - 正方向: hasX（ex:hasFounder, ex:hasMember）
-    - 逆方向: isXOf / XOf / XBy（ex:founderOf, ex:memberOf, ex:createdBy）
-    - 正方向と逆方向は別プロパティとして定義し、owl:inverseOf で関連づける
-    - 同じ概念に対して isXOf と XOf の両方を定義しない（どちらか一方を選ぶ）
-    - 汎用的で短い名前を優先する（ex:founded > ex:foundedCompany）
+    ### Object Property Naming
+    - Forward: hasX (ex:hasFounder, ex:hasMember)
+    - Inverse: isXOf / XOf / XBy (ex:founderOf, ex:memberOf, ex:createdBy)
+    - Forward and inverse are separate properties linked by owl:inverseOf
+    - Do not define both isXOf and XOf for the same concept (pick one)
+    - Prefer short, generic names (ex:founded > ex:foundedCompany)
 
-    ### 逆プロパティ（owl:inverseOf）
-    - 「A hasX B」⇔「B XOf A」の関係を逆プロパティと呼ぶ
-    - 逆プロパティは merge してはいけない（主語と目的語が逆転する）
-    - 逆関係のパターン:
-      - hasX ↔ isXOf / XOf（ex:hasFounder ↔ ex:founderOf）
-      - X ↔ XBy（ex:acquired ↔ ex:acquiredBy）
-      - hasPart ↔ partOf（mereology の標準ペア）
+    ### Inverse Properties (owl:inverseOf)
+    - "A hasX B" ⇔ "B XOf A" is an inverse property pair
+    - Never merge inverse properties (subject and object swap)
+    - Patterns:
+      - hasX ↔ isXOf / XOf (ex:hasFounder ↔ ex:founderOf)
+      - X ↔ XBy (ex:acquired ↔ ex:acquiredBy)
+      - hasPart ↔ partOf (standard mereology pair)
 
-    ### name 系 DataProperty の禁止
-    - エンティティの名前は rdfs:label を使用する
-    - companyName, personName, productName 等のドメイン固有 name プロパティは定義しない
-    - rdfs:label は define_ontology での定義不要（標準プロパティ）
+    ### No name-specific DataProperties
+    - Use rdfs:label for entity names
+    - Do not define companyName, personName, productName, etc.
+    - rdfs:label is a standard property — no need to define it
 
-    ### DataProperty の命名規約
-    - 汎用的で短い名前を優先する（ex:revenue > ex:revenueAmount）
-    - Amount, Value, Count 等のサフィックスは冗長であれば省略する
+    ### DataProperty Naming
+    - Prefer short, generic names (ex:revenue > ex:revenueAmount)
+    - Omit redundant suffixes like Amount, Value, Count
 
-    ## データプロパティ値の規約
-    - 値は原子的（数値、日付、短いラベル、URI）
-    - 文章や説明文は値にならない
+    ## DataProperty Value Rules
+    - Values must be atomic (numbers, dates, short labels, URIs)
+    - Sentences or descriptions are not valid values
 
-    ## Defined Class（構造分類）
-    - 条件を満たすインスタンスを自動分類するクラス（equivalentClass）
-    - Reasoner が条件に合うインスタンスに自動で rdf:type を付与する
+    ## Defined Class (Structural Classification)
+    - A class that auto-classifies instances meeting certain conditions (equivalentClass)
+    - The Reasoner automatically assigns rdf:type to matching instances
 
-    ## TBox と ABox
-    - TBox（用語層）: クラス、プロパティ、階層の定義
-    - ABox（事実層）: 具体的なインスタンスとその属性・関係
+    ## TBox and ABox
+    - TBox (terminological): class, property, and hierarchy definitions
+    - ABox (assertional): concrete instances with their attributes and relationships
 
-    ## イベントモデル（Event Reification）
+    ## Event Model (Event Reification)
 
-    出来事・事象はエンティティとして保存される。
-    イベントは固有名を持つ個体であり、中間ノードではない。
+    Occurrences are stored as entities.
+    Events are named individuals, not intermediate nodes.
 
-    ### 基底クラス
-    - ex:Event — すべてのイベントの基底クラス。具体的なイベント型はサブクラスとして定義される
-    - ex:Era — 名前付きの時代・時期（例: 飛鳥時代、ルネサンス）。出来事ではなく時間的枠組み。startDate / endDate で期間を表す
+    ### Base Classes
+    - ex:Event — base class for all events. Specific event types are subclasses.
+    - ex:Era — named time period (e.g. Renaissance, Edo period). Not an event, but a temporal frame. Uses startDate / endDate.
 
-    ### rdf:type は最も具体的なクラスを使用
-    - 上位オントロジーの階層を参照し、最も具体的なサブクラスを rdf:type に指定する
-    - 戦闘 → ex:Battle（ex:Event ではない）
-    - 買収 → ex:Acquisition（ex:Agreement ではない）
-    - 人事 → ex:Appointment（ex:Transition ではない）
-    - 展示 → ex:Exhibition（ex:Gathering ではない）
-    - 地震 → ex:Earthquake（ex:NaturalDisaster ではない）
-    - 誕生 → ex:Birth、死亡 → ex:Death
-    - 時代 → ex:Era（ex:Event ではない）
-    - 推論が superClass を自動付与するため、親クラスの rdf:type は不要
-    - 1つのエンティティに付与する rdf:type は1つ（最も具体的なもの）
+    ### Use the Most Specific rdf:type
+    - Refer to the upper ontology hierarchy and assign the most specific subclass as rdf:type
+    - Battle → ex:Battle (not ex:Event)
+    - Acquisition → ex:Acquisition (not ex:Agreement)
+    - Appointment → ex:Appointment (not ex:Transition)
+    - Exhibition → ex:Exhibition (not ex:Gathering)
+    - Earthquake → ex:Earthquake (not ex:NaturalDisaster)
+    - Birth → ex:Birth, Death → ex:Death
+    - Era → ex:Era (not ex:Event)
+    - The reasoner infers superClass types automatically — no need for parent rdf:type
+    - Assign exactly one rdf:type per entity (the most specific)
 
-    ### イベントのサブタイプ
-    上位オントロジーの Event 配下を参照。
-    新規イベントクラスは最も近いサブタイプの子として定義する。
+    ### Event Subtypes
+    Refer to the Event subtree in the upper ontology.
+    New event classes should be defined as children of the closest subtype.
 
-    ### イベントの時間述語（DataProperty）
-    - ex:date — 日付（domain: ex:Occurrent, range: ISO 8601 精度別 xsd:gYear YYYY / xsd:gYearMonth YYYY-MM / xsd:date YYYY-MM-DD）。過去・未来を問わない
-    - ex:time — 時刻（domain: ex:Occurrent, range: xsd:time HH:MM:SS）。明示されている場合のみ
-    - ex:startDate — 期間の開始日（domain: ex:Occurrent, range: 同上）
-    - ex:endDate — 期間の終了日（domain: ex:Occurrent, range: 同上）
+    ### Event Temporal Properties (DataProperty)
+    - ex:date — date (domain: ex:Occurrent, range: ISO 8601 xsd:gYear / xsd:gYearMonth / xsd:date). Past or future.
+    - ex:time — time of day (domain: ex:Occurrent, range: xsd:time HH:MM:SS). Only when explicitly stated.
+    - ex:startDate — period start (domain: ex:Occurrent, same range)
+    - ex:endDate — period end (domain: ex:Occurrent, same range)
 
-    ### イベントの関係述語（ObjectProperty）
-    - ex:hasParticipant — 参加エンティティ（domain: ex:Event, archetype: participation）
-    - ex:causes — イベント間の因果（domain: ex:Event, range: ex:Event, archetype: causation）
+    ### Event Relationship Properties (ObjectProperty)
+    - ex:hasParticipant — participating entity (domain: ex:Event, archetype: participation)
+    - ex:causes — event-to-event causation (domain: ex:Event, range: ex:Event, archetype: causation)
 
-    ### 汎用関係述語（ObjectProperty）
-    以下はシード済み。define_ontology での再定義は不要。
-    - ex:partOf / ex:hasPart — 部分-全体の階層（transitive, archetype: mereology）。組織階層、構成要素等に使用
-    - ex:locatedIn — 所在地（transitive, range: ex:Place, archetype: location）。本社、拠点、開催地等に使用。headquarteredIn 等の特殊化は原則不要
-    - ex:hasFounder / ex:founderOf — 創設者（archetype: association）。Organization, Project 等に使用
-    - ex:hasMember / ex:memberOf — 所属・会員（archetype: association）。Person→Organization, Organization→Organization に使用
-    - ex:produces / ex:producedBy — 生産・製造（archetype: association）。develops, manufactures, offers 等の特殊化は原則不要
+    ### Universal Relationship Properties (ObjectProperty)
+    Pre-seeded. Do not redefine.
+    - ex:partOf / ex:hasPart — part-whole hierarchy (transitive, mereology)
+    - ex:locatedIn — location (transitive, range: ex:Place)
+    - ex:hasFounder / ex:founderOf — founder (association)
+    - ex:hasMember / ex:memberOf — membership (association)
+    - ex:produces / ex:producedBy — production (association)
 
-    ### 直接関係の併記
-    イベントに加えて、参加者間の直接関係も存在する。
-    検索時はイベント経由でも直接関係経由でも到達できる。
+    ### Direct Relationships Alongside Events
+    In addition to events, direct relationships between participants exist.
+    Both event-mediated and direct paths should be searchable.
 
-    ## 外部参照（DataProperty）
+    ## External References (DataProperty)
 
-    エンティティに関連する外部リソースの URL を DataProperty で記録する。
+    Record URLs of external resources related to entities.
 
-    ### 標準プロパティ
-    - ex:wikipediaURL — Wikipedia ページの URL（domain: owl:Thing, range: xsd:anyURI）
-    - ex:officialURL — 公式サイトの URL（domain: owl:Thing, range: xsd:anyURI）
-    - ex:imageURL — 画像の URL（domain: owl:Thing, range: xsd:anyURI）
+    ### Standard Properties
+    - ex:wikipediaURL — Wikipedia page URL (domain: owl:Thing, range: xsd:anyURI)
+    - ex:officialURL — official website URL (domain: owl:Thing, range: xsd:anyURI)
+    - ex:imageURL — image URL (domain: owl:Thing, range: xsd:anyURI)
 
-    ### 規約
-    - URL はそのまま目的語に格納する（短縮・加工しない）
-    - 1つのエンティティに同種の URL は複数付与可
-    - テキストに URL が存在しない場合は作成しない（推測禁止）
-    - これらは標準 DataProperty であり、define_ontology での再定義は不要
+    ### Rules
+    - Store URLs as-is in the object position (no shortening)
+    - Multiple URLs of the same type per entity are allowed
+    - Do not fabricate URLs — only record when present in source text
+    - These are standard DataProperties — no need to redefine
 
-    ## IRI 命名
-    - プレフィックス付き短縮形（ex:Company, ex:name）
-    - クラス: UpperCamelCase（ex:Person）
-    - プロパティ: lowerCamelCase（ex:hasAuthor）
-    - エンティティ: ASCII 識別子を使用
-    - 日本語名や非 ASCII 文字は IRI に使用しない
+    ## IRI Naming
+    - Use prefixed short forms (ex:Company, ex:name)
+    - Classes: UpperCamelCase (ex:Person)
+    - Properties: lowerCamelCase (ex:hasAuthor)
+    - Entities: use ASCII identifiers
+    - Do not use non-ASCII characters in IRIs
 
-    ## rdfs:label（必須）
+    ## rdfs:label (Required)
 
-    すべてのエンティティに rdfs:label を付与する。
-    rdfs:label にはテキスト中の**原語表記**をそのまま使用する。
+    Every entity must have an rdfs:label.
+    Use the **original language form** from the source text.
 
-    ### 規約
-    - rdfs:label は標準プロパティであり、define_ontology での定義は不要
-    - 人物名・組織名・製品名など、テキスト中の表記をそのまま保存する
-    - 検索時に日本語名で引けるようにするための必須プロパティ
+    ### Rules
+    - rdfs:label is a standard property — no need to define it
+    - Store names as they appear in the text (person names, org names, product names, etc.)
+    - This is required for label-based recall in any language
 
-    ## カテゴリの排他性
+    ## Category Exclusivity
 
-    ある個体が同時に属し得ないクラスの組がある。
-    排他宣言は Reasoner による誤分類の検出に使われる。
+    Some classes are mutually exclusive — an individual cannot belong to both.
+    Disjoint declarations are used by the Reasoner to detect misclassification.
 
-    ### 排他的なカテゴリ
-    - Person と Organization（人は組織ではない）
-    - Person と Place（人は場所ではない）
-    - Occurrent と Person / Organization / Place（時間的存在は実体ではない）
-    - Event と Era（出来事は時代ではない）
-    - Product と Service（製品はサービスではない）
-    - Organism と Organization（生物は組織ではない）
+    ### Disjoint Categories
+    - Person and Organization
+    - Person and Place
+    - Occurrent and Person / Organization / Place
+    - Event and Era
+    - Product and Service
+    - Organism and Organization
 
-    ### 排他でないカテゴリ
-    - Facility と Organization（「東京大学」は施設でもあり組織でもある）
-    - Technology と Product（ソフトウェアは技術でもあり製品でもある）
-    - Activity と Event（活動が出来事として記録される場合がある）
+    ### Non-Disjoint Categories
+    - Facility and Organization (a university is both)
+    - Technology and Product (software is both)
+    - Activity and Event (an activity may be recorded as an event)
 
-    ### 判断基準
-    - 同一の個体が両方に属する現実的なシナリオがあるなら排他宣言しない
-    - 迷う場合は宣言しない（誤った排他は推論を壊す）
+    ### Decision Rule
+    - If a realistic scenario exists where one individual belongs to both, do not declare disjoint
+    - When in doubt, do not declare (false disjoint breaks reasoning)
 
-    ## 関係の性質
+    ## Property Characteristics
 
-    ObjectProperty を定義するとき、その関係が持つ性質を宣言する。
-    性質は Reasoner が暗黙のトリプルを推論するために使う。
+    When defining an ObjectProperty, declare its characteristics.
+    The Reasoner uses these to infer implicit triples.
 
-    ### 推移性（transitive）
-    A→B かつ B→C ならば A→C。包含・階層の関係に適用する。
-    - locatedIn: 渋谷にある建物は東京にもあり、日本にもある
-    - partOf: ピストンがエンジンの一部で、エンジンが車の一部なら、ピストンは車の一部
-    - subOrganizationOf: 部署→事業部→本社
+    ### Transitivity
+    A→B and B→C implies A→C. For containment and hierarchy.
+    - locatedIn: a building in Shibuya is also in Tokyo, also in Japan
+    - partOf: a piston in an engine, engine in a car → piston in a car
+    - subOrganizationOf: department → division → headquarters
 
-    推移性を宣言してはいけないもの:
-    - hasFounder, hasParent — 直接的な関係のみ意味がある
+    Do NOT declare transitive:
+    - hasFounder, hasParent — only direct relationships are meaningful
 
-    ### 対称性（symmetric）
-    A→B ならば B→A。対等な関係に適用する。
+    ### Symmetry
+    A→B implies B→A. For peer relationships.
     - allianceWith, competitorOf, siblingOf, adjacentTo
 
-    ### 一意性（functional）
-    ある主語に対して目的語が最大1つ。
+    ### Functional
+    At most one object per subject.
     - hasBirthPlace, hasHeadquarters, hasCapital
 
-    一意性を宣言してはいけないもの:
-    - hasMember, hasProduct — 複数値を取り得る
+    Do NOT declare functional:
+    - hasMember, hasProduct — can have multiple values
 
-    ### 逆一意性（inverseFunctional）
-    ある目的語に対して主語が最大1つ。識別子的な関係に適用する。
-    - hasIBAN — 同じ IBAN を持つ口座は1つ
-    - hasStockTicker — 同じ証券コードを持つ企業は1つ
+    ### Inverse Functional
+    At most one subject per object. For identifier-like relationships.
+    - hasIBAN, hasStockTicker
 
-    ### 非対称性（asymmetric）
-    A→B のとき B→A は成り立たない。方向性が固定の関係に適用する。
+    ### Asymmetric
+    A→B does not imply B→A. For fixed-direction relationships.
     - parentOf, supervises, partOf
 
-    ### 判断基準
-    - 「例外なく常に成り立つか？」で判断する。1つでも例外があるなら宣言しない
-    - 推移性は推論の連鎖を生むため最も慎重に判断する
-    - 一意性を宣言すると、2つ以上の値がある場合に矛盾として検出される
+    ### Decision Rule
+    - Only declare if it holds universally without exception
+    - Transitivity is the most impactful — be most cautious
+    - Functional declarations cause contradictions when multiple values exist
 
-    ## 時間精度の保存
+    ## Temporal Precision
 
-    日付・時間の情報はソーステキストの精度をそのまま保存する。
-    精度を推測して補完してはならない。
-    - 「2024年」→ xsd:gYear（「2024-01-01」にしない）
-    - 「2024年3月」→ xsd:gYearMonth
-    - 「2024年3月15日」→ xsd:date
+    Preserve the precision of date/time information from source text.
+    Do not round or fill in missing precision.
+    - "2024" → xsd:gYear (not "2024-01-01")
+    - "March 2024" → xsd:gYearMonth
+    - "March 15, 2024" → xsd:date
     """
     }
 }
