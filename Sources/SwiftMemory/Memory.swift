@@ -92,28 +92,58 @@ public actor Memory {
 
     private func persist(_ batch: MemoryBatch) async throws {
 
-        // Givens — fill zero embedding if empty (vector index requires 384 dims)
-        for var given in batch.givens {
-            if given.embedding.isEmpty {
-                given.embedding = [Float](repeating: 0, count: 384)
-            }
+        // Givens → Given @Persistable records
+        for record in batch.givens {
+            var given = Given(
+                modality: "text",
+                payloadRef: record.text,
+                embedding: [Float](repeating: 0, count: 384),
+                timestamp: Date(),
+                source: record.source
+            )
             context.fdbContext.insert(given)
         }
 
-        // Entities — deduplicate by recall
+        // Entities → rdf:type + rdfs:label + property triples
         for entity in batch.entities {
-            context.fdbContext.insert(entity)
+            let iri = "memory:\(entity.type.lowercased())/\(entity.name.lowercased().replacingOccurrences(of: " ", with: "_"))"
+            context.fdbContext.insert(Statement(
+                graph: context.graphName, subject: iri, predicate: "rdf:type", object: "ex:\(entity.type)"
+            ))
+            context.fdbContext.insert(Statement(
+                graph: context.graphName, subject: iri, predicate: "rdfs:label", object: entity.name
+            ))
+            for (key, value) in entity.properties {
+                context.fdbContext.insert(Statement(
+                    graph: context.graphName, subject: iri, predicate: key, object: value
+                ))
+            }
         }
 
-        // Statements — fill graph name
-        for var statement in batch.statements {
-            if statement.graph.isEmpty {
-                statement.graph = context.graphName
-            }
-            context.fdbContext.insert(statement)
+        // Statements → Statement @Persistable records
+        for record in batch.statements {
+            let subject = resolveIRI(record.subject, entities: batch.entities)
+            let object = resolveIRI(record.object, entities: batch.entities)
+            context.fdbContext.insert(Statement(
+                graph: context.graphName,
+                subject: subject,
+                predicate: record.predicate,
+                object: object
+            ))
         }
 
         try await context.fdbContext.save()
+    }
+
+    /// Resolve a name or IRI. If it matches an entity name, return its IRI.
+    private func resolveIRI(_ value: String, entities: [EntityRecord]) -> String {
+        // Already an IRI
+        if value.contains(":") { return value }
+        // Look up by name in entities
+        if let entity = entities.first(where: { $0.name == value }) {
+            return "memory:\(entity.type.lowercased())/\(value.lowercased().replacingOccurrences(of: " ", with: "_"))"
+        }
+        return value
     }
 
     // MARK: - Recall

@@ -1,32 +1,31 @@
 // MemoryBatch.swift
-// Atomic unit produced by MemoryEncoding
+// Atomic unit produced by MemoryEncoding — fully Codable for LLM JSON output
 
 import Foundation
-import Database
-import Hoot
 
-/// The result of encoding input — a set of Givens, Entities, and Statements.
+/// The result of encoding input — Givens, Entities, and Statements.
 ///
-/// Written atomically to the database in a single transaction.
-/// Memory handles deduplication: entities with matching label + type
-/// are updated instead of duplicated.
-public struct MemoryBatch: Sendable {
+/// Fully `Codable` so it can be decoded directly from LLM JSON output.
+/// `Memory` converts these records into `@Persistable` objects and
+/// RDF triples during persistence.
+public struct MemoryBatch: Sendable, Codable {
 
-    /// Raw sensory data with embeddings.
-    public var givens: [Given]
+    /// Raw sensory materials.
+    public var givens: [GivenRecord]
 
-    /// Typed @OWLClass entity records.
-    public var entities: [any Persistable]
+    /// Entity records (type + name + properties).
+    /// Memory converts these to @OWLClass records + rdf:type/rdfs:label triples.
+    public var entities: [EntityRecord]
 
-    /// RDF triples (relationships between entities).
-    public var statements: [Statement]
+    /// Relationship triples (subject, predicate, object).
+    public var statements: [StatementRecord]
 
     public static let empty = MemoryBatch(givens: [], entities: [], statements: [])
 
     public init(
-        givens: [Given] = [],
-        entities: [any Persistable] = [],
-        statements: [Statement] = []
+        givens: [GivenRecord] = [],
+        entities: [EntityRecord] = [],
+        statements: [StatementRecord] = []
     ) {
         self.givens = givens
         self.entities = entities
@@ -36,35 +35,26 @@ public struct MemoryBatch: Sendable {
     // MARK: - Builder Methods
 
     /// Add raw text as Given material.
-    public mutating func given(_ text: String, source: String) {
-        givens.append(Given(
-            modality: "text",
-            payloadRef: text,
-            embedding: [],
-            timestamp: Date(),
-            source: source
-        ))
+    public mutating func given(_ text: String, source: String = "text") {
+        givens.append(GivenRecord(text: text, source: source))
     }
 
-    /// Add an @OWLClass entity.
-    /// Memory will check for existing entity and upsert automatically.
-    public mutating func entity(_ entity: some Persistable) {
-        entities.append(entity)
+    /// Add an entity.
+    public mutating func entity(
+        type: String,
+        name: String,
+        properties: [String: String] = [:]
+    ) {
+        entities.append(EntityRecord(type: type, name: name, properties: properties))
     }
 
     /// Add a relationship triple.
-    /// Graph name is filled by Memory on persist.
     public mutating func triple(
         _ subject: String,
         _ predicate: String,
         _ object: String
     ) {
-        statements.append(Statement(
-            graph: "",
-            subject: subject,
-            predicate: predicate,
-            object: object
-        ))
+        statements.append(StatementRecord(subject: subject, predicate: predicate, object: object))
     }
 
     // MARK: - Merge
@@ -76,34 +66,58 @@ public struct MemoryBatch: Sendable {
             statements: statements + other.statements
         )
     }
+}
 
-    // MARK: - HOOT Export
+// MARK: - Records
 
-    /// Convert statements to HOOT compact format for LLM context.
-    public func asHOOT(namespace: String = "http://example.org/") -> String {
-        guard !statements.isEmpty else { return "" }
+/// Raw sensory material record.
+public struct GivenRecord: Sendable, Codable, Hashable {
+    /// Text content.
+    public var text: String
+    /// Source identifier (e.g. "chat", "mail", "file").
+    public var source: String
 
-        var turtleLines: [String] = []
-        turtleLines.append("@prefix ex: <\(namespace)> .")
-        turtleLines.append("@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .")
-        turtleLines.append("@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .")
-        turtleLines.append("@prefix owl: <http://www.w3.org/2002/07/owl#> .")
-        turtleLines.append("@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .")
-        turtleLines.append("")
+    public init(text: String, source: String = "text") {
+        self.text = text
+        self.source = source
+    }
+}
 
-        for statement in statements {
-            turtleLines.append("\(statement.subject) \(statement.predicate) \(statement.object) .")
-        }
+/// Entity record — describes an entity to create or update.
+///
+/// LLM outputs this directly:
+/// ```json
+/// {"type": "Person", "name": "Alice", "properties": {"email": "alice@acme.com"}}
+/// ```
+public struct EntityRecord: Sendable, Codable, Hashable {
+    /// OWL class name (e.g. "Person", "Organization").
+    public var type: String
+    /// Entity display name (becomes rdfs:label).
+    public var name: String
+    /// Additional properties as key-value pairs (e.g. {"email": "alice@acme.com"}).
+    public var properties: [String: String]
 
-        let turtle = turtleLines.joined(separator: "\n")
+    public init(type: String, name: String, properties: [String: String] = [:]) {
+        self.type = type
+        self.name = name
+        self.properties = properties
+    }
+}
 
-        let parser = TurtleParser()
-        do {
-            let turtleDoc = try parser.parse(turtle)
-            let hootDoc = HootCompiler().compile(turtleDoc)
-            return HootEncoder(mode: .compact).encode(hootDoc)
-        } catch {
-            return turtle
-        }
+/// Relationship triple record.
+///
+/// LLM outputs this directly:
+/// ```json
+/// {"subject": "Alice", "predicate": "ex:worksAt", "object": "Acme Corp"}
+/// ```
+public struct StatementRecord: Sendable, Codable, Hashable {
+    public var subject: String
+    public var predicate: String
+    public var object: String
+
+    public init(subject: String, predicate: String, object: String) {
+        self.subject = subject
+        self.predicate = predicate
+        self.object = object
     }
 }
