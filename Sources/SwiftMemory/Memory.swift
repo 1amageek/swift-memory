@@ -4,6 +4,9 @@
 import Foundation
 import Database
 import MemoryOntology
+import os.log
+
+private let logger = Logger(subsystem: "com.memory", category: "Memory")
 
 /// Knowledge persistence system for LLM agents.
 ///
@@ -67,7 +70,11 @@ public actor Memory {
     /// 6. Atomic save
     public func store(_ input: any GivenRepresentable) async throws {
         let batch = try await encoding.interpret(input)
-        guard !batch.entities.isEmpty || !batch.statements.isEmpty else { return }
+        guard !batch.entities.isEmpty || !batch.statements.isEmpty else {
+            logger.info("[store] empty batch — nothing saved")
+            return
+        }
+        logger.info("[store] persisting \(batch.entities.count) entities, \(batch.statements.count) statements")
 
         // Save input as Given
         let content = input.givenRepresentation
@@ -116,6 +123,7 @@ public actor Memory {
         }
 
         try await context.fdbContext.save()
+        logger.info("[store] saved to DB")
     }
 
     /// Store a pre-built MemoryBatch directly.
