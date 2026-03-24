@@ -1,17 +1,17 @@
-// OntologyPolicy.swift
-// Write/Read 共通のオントロジー設計方針
+// DefaultOntologyPolicy.swift
+// Default ontology policy with 26 primitive classes and ~120 subclasses
 
 import Database
-import Hoot
 
-/// オントロジー設計方針
+/// Default ontology policy.
 ///
-/// WriteStep（保存）と ReadStep（検索）の両方が参照する共通知識。
-/// LLM が正しい述語名・クラス構造・イベントモデルで動作するための定義。
-public enum OntologyPolicy {
+/// Provides the standard upper ontology (26 primitive classes, ~120 subclasses,
+/// standard properties). Used as the default when no custom policy is provided.
+public struct DefaultOntologyPolicy: OntologyPolicy, Sendable {
 
-    /// 上位オントロジーのトップレベルクラス（親なし）
-    public static let primitiveClasses: [(iri: String, label: String)] = [
+    public init() {}
+
+    public let primitiveClasses: [(iri: String, label: String)] = [
         ("ex:Person", "Person"),
         ("ex:Organization", "Organization"),
         ("ex:Place", "Place"),
@@ -40,8 +40,7 @@ public enum OntologyPolicy {
         ("ex:Brand", "Brand"),
     ]
 
-    /// 上位オントロジーの階層（シード時に subClassOf axiom も追加する）
-    public static let seedSubClasses: [(iri: String, label: String, superClass: String)] = [
+    public let seedSubClasses: [(iri: String, label: String, superClass: String)] = [
         // Person
         ("ex:Politician", "Politician", "ex:Person"),
         ("ex:Ruler", "Ruler", "ex:Person"),
@@ -322,78 +321,26 @@ public enum OntologyPolicy {
     ]
 
     /// 上位オントロジーの全 IRI セット（トップレベル + サブクラス）
-    public static var allPrimitiveIRIs: Set<String> {
-        Set(primitiveClasses.map(\.iri) + seedSubClasses.map(\.iri))
-    }
-
-    /// シードプロパティの IRI セット（merge で消してはいけない）
-    public static let seedPropertyIRIs: Set<String> = [
-        // Universal ObjectProperties
+    public let objectPropertyIRIs: Set<String> = [
         "ex:partOf", "ex:hasPart",
         "ex:locatedIn",
         "ex:hasFounder", "ex:founderOf",
         "ex:memberOf", "ex:hasMember",
         "ex:produces", "ex:producedBy",
-        // Event ObjectProperties
         "ex:hasParticipant", "ex:participatesIn",
         "ex:causes", "ex:causedBy",
-        // Occurrent DataProperties
+    ]
+
+    public let dataPropertyIRIs: Set<String> = [
         "ex:date", "ex:time",
         "ex:startDate", "ex:endDate",
-        // External Reference DataProperties
         "ex:wikipediaURL", "ex:officialURL", "ex:imageURL",
     ]
 
-    /// オントロジーに上位オントロジーのクラスが存在しなければシードする
-    public static func seedPrimitiveClasses(
-        context: FDBContext,
-        graphName: String
-    ) async throws {
-        let ontologyIRI = MemoryContext.ontologyIRI(for: graphName)
-        var ontology = try await context.ontology.get(iri: ontologyIRI)
-            ?? OWLOntology(iri: ontologyIRI)
+    // MARK: - Build Ontology
 
-        let existingIRIs = Set(ontology.classes.map(\.iri))
-        var added = 0
-
-        for (iri, label) in primitiveClasses {
-            if !existingIRIs.contains(iri) {
-                ontology.classes.append(OWLClass(iri: iri, label: label))
-                added += 1
-            }
-            // プリミティブクラスは owl:Thing を親に持つ
-            let axiom = OWLAxiom.subClassOf(sub: .named(iri), sup: .named("owl:Thing"))
-            if !ontology.axioms.contains(axiom) {
-                ontology.axioms.append(axiom)
-                added += 1
-            }
-        }
-
-        for (iri, label, superClass) in seedSubClasses {
-            if !existingIRIs.contains(iri) {
-                ontology.classes.append(OWLClass(iri: iri, label: label))
-                added += 1
-            }
-            let axiom = OWLAxiom.subClassOf(sub: .named(iri), sup: .named(superClass))
-            if !ontology.axioms.contains(axiom) {
-                ontology.axioms.append(axiom)
-                added += 1
-            }
-        }
-
-        if added > 0 {
-            try await context.ontology.load(ontology)
-        }
-    }
-
-    // MARK: - Base Ontology
-
-    /// Schema に渡すベースオントロジーを構築する
-    ///
-    /// TBox（クラス階層 + 排他宣言）+ RBox（標準プロパティ）を含む。
-    /// ABox（個体）は含まない（実行時に動的に追加される）。
-    public static func buildBaseOntology() -> OWLOntology {
-        OWLOntology(iri: MemoryContext.ontologyIRI, prefixes: ["ex": "http://example.org/"]) {
+    public func buildOntology() -> OWLOntology {
+        OWLOntology(iri: "memory:", prefixes: ["ex": "http://example.org/"]) {
 
             // ── TBox: Primitive Classes (→ owl:Thing) ──
 
@@ -555,17 +502,12 @@ public enum OntologyPolicy {
         }
     }
 
-    /// 上位オントロジーの HOOT 表現（LLM instructions に注入する）
-    ///
-    /// `buildBaseOntology()` から自動生成される。
-    /// クラス階層・排他宣言・プロパティ定義・domain/range をすべて含む。
-    /// HOOT compact モードにより Turtle 比で大幅にトークン数を削減。
-    public static let upperOntologyText: String = buildBaseOntology().toHoot(mode: .compact)
+    /// Upper ontology as Turtle text for LLM context.
+    public var upperOntologyText: String {
+        buildOntology().toTurtle()
+    }
 
-    /// 共通方針テキスト（instructions に注入する）
-    ///
-    /// - Parameter existingVocabulary: DB から取得した既存カスタム語彙テキスト（空文字可）
-    public static func definition(existingVocabulary: String = "") -> String {
+    public var definition: String {
         """
     # オントロジー設計方針
 
@@ -605,8 +547,6 @@ public enum OntologyPolicy {
     ### 上位オントロジー（シード）
 
     \(upperOntologyText)
-
-    \(existingVocabulary)
 
     ## プロパティ設計
     - オブジェクトプロパティ: エンティティ間の関係

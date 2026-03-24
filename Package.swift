@@ -6,6 +6,7 @@ let package = Package(
     name: "swift-memory",
     platforms: [.macOS(.v26)],
     products: [
+        .library(name: "MemoryOntology", targets: ["MemoryOntology"]),
         .library(name: "SwiftMemory", targets: ["SwiftMemory"]),
     ],
     dependencies: [
@@ -21,15 +22,22 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "MemoryOntology",
+            dependencies: [
+                .product(name: "Database", package: "database-framework"),
+            ]
+        ),
+        .target(
             name: "SwiftMemory",
             dependencies: [
+                "MemoryOntology",
                 .product(name: "Database", package: "database-framework"),
                 .product(name: "Hoot", package: "swift-hoot"),
             ]
         ),
         .testTarget(
             name: "SwiftMemoryTests",
-            dependencies: ["SwiftMemory"]
+            dependencies: ["SwiftMemory", "MemoryOntology"]
         ),
     ],
     swiftLanguageModes: [.v6]
