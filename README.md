@@ -32,6 +32,61 @@ Not a store of knowledge, but the whole system embracing raw material and struct
 
 **Memory** — The place that holds both the uninterpreted materials and the structured relations born from them. When we remember an event, we carry not just its meaning but also the quality of light and the texture of voice. Memory embraces the whole.
 
+## Conceptual Relations
+
+### Memory is the whole
+
+Memory is not a box of knowledge. It is the place — the system — where something is retained and may later be recalled. Memory contains at least two kinds:
+
+- **Given** — what is presented as the basis for interpretation
+- **Knowledge** — the relational structure formed through interpretation
+
+And **Concept** is the operational unit that mediates between them.
+
+### Given is what is presented
+
+Given is what is there before full determination. Not yet a fixed concept, but not nothing. It is the material from which memory and interpretation arise — perceptual, eventful, or linguistic. Given is not raw data waiting to be processed; it is what is presented as the ground for meaning.
+
+### Concept carves Given into intelligible units
+
+Concept finds differences and coherence within Given and makes them handleable as units. It distinguishes, groups, relates, and renders things available for reasoning. Concept is not a static dictionary entry — it is the operation that transforms Given into interpretable units. It arises when needed and dissolves when done.
+
+### Knowledge is the structure between Concepts
+
+Knowledge is not isolated fragments but Concepts placed in relation:
+
+- A is B
+- A belongs to B
+- A causes B
+- A precedes B
+- A resembles B
+
+Knowledge is the stable relational structure among Concepts.
+
+### The cycle
+
+The transformation is not one-directional. Once Knowledge forms, it shapes how new Given is interpreted:
+
+```
+Given → Concept → Knowledge → shapes future interpretation of Given
+```
+
+### Recall is reactivation
+
+Recall is not limited to retrieving Knowledge. Given can be recalled. Relations can be recalled. Atmospheres and scenes can be recalled. Conceptual understanding can rise again. Recall is the reactivation of whatever Memory holds.
+
+### Grounding is a kind of Knowledge
+
+Grounding — the link between Given and its interpretation — is not a separate layer. "This Given supports this understanding" is itself a relation, and relations are Knowledge. Grounding is Knowledge that binds Given to interpretation.
+
+### Concept is not the center of storage
+
+Concept is essential, but it is not what sits in Memory as a fixed object. It arises to understand Given, works to assemble Knowledge, and is reconstructed at Recall. Concept is not the static body of Memory but the dynamic mediator that makes meaning possible.
+
+### In one sentence
+
+**Memory holds Given (what is presented) and Knowledge (relational structure formed through interpretation). Concept mediates between them. Recall reactivates what Memory holds.**
+
 ## Design Principles
 
 - Memory stores **Given** and **Knowledge**. It does not store Concepts.
