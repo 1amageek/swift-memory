@@ -25,7 +25,6 @@ public actor Memory {
     private let recallEngine: RecallEngine
 
     public nonisolated let ontologyPolicy: any OntologyPolicy
-    public nonisolated let entityRegistry: EntityRegistry
 
     public init(
         path: String?,
@@ -35,8 +34,6 @@ public actor Memory {
         graphName: String = "memory:default"
     ) async throws {
         self.ontologyPolicy = ontologyPolicy
-        self.entityRegistry = EntityRegistry(entityTypes)
-
         let allTypes: [any Persistable.Type] = [Given.self, Statement.self] + entityTypes
         let schema = Schema(allTypes, version: Schema.Version(1, 0, 0))
 
