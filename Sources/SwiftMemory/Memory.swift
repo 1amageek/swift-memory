@@ -100,6 +100,11 @@ public actor Memory {
         logger.info("[store] \(batch.entities.count) entities, \(batch.statements.count) statements")
     }
 
+    /// Store from a MemoryBatchConvertible (e.g. @Generable store input).
+    public func store(_ input: some MemoryBatchConvertible) async throws {
+        try await store(input.toBatch())
+    }
+
     // MARK: - Recall
 
     /// Recall from keywords — spreading activation.
