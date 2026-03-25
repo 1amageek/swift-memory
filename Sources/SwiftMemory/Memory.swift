@@ -120,6 +120,43 @@ public actor Memory {
         logger.info("[store] given=\(givenID) entities=\(batch.entities.count) statements=\(batch.statements.count)")
     }
 
+    /// Store Given + Knowledge from raw data and a decode closure.
+    /// Used by MCP tool handler where knowledge comes as JSON Data.
+    public func store(given: any Memorable, knowledgeData: Data, decode: @Sendable (Data, String) throws -> MemoryBatch) async throws {
+        let givenID = ULID().ulidString
+        let batch = try decode(knowledgeData, givenID)
+
+        guard !batch.entities.isEmpty || !batch.statements.isEmpty else {
+            logger.info("[store] empty knowledge — nothing saved")
+            return
+        }
+
+        var givenRecord = Given(
+            modality: given.modality,
+            payloadRef: given.payloadRef,
+            embedding: [Float](repeating: 0, count: 384),
+            timestamp: Date(),
+            source: "given"
+        )
+        givenRecord.id = givenID
+        context.fdbContext.insert(givenRecord)
+
+        for entity in batch.entities {
+            context.fdbContext.insert(entity)
+        }
+        for record in batch.statements {
+            context.fdbContext.insert(Statement(
+                graph: context.graphName,
+                subject: record.subject,
+                predicate: record.predicate,
+                object: record.object
+            ))
+        }
+
+        try await context.fdbContext.save()
+        logger.info("[store] given=\(givenID) entities=\(batch.entities.count) statements=\(batch.statements.count)")
+    }
+
     /// Store a batch directly (without Given).
     public func store(_ batch: MemoryBatch) async throws {
         guard !batch.entities.isEmpty || !batch.statements.isEmpty else { return }
