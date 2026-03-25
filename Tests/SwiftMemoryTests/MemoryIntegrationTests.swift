@@ -59,7 +59,7 @@ struct MemoryIntegrationTests {
         let memory = try await Memory(path: nil, encoding: TripleEncoding())
         try await memory.store("triple:ex:person/alice,rdf:type,ex:Person; triple:ex:person/alice,rdfs:label,Alice")
 
-        let result = try await memory.recall(keywords: ["Alice"])
+        let result = try await memory.associate(cues: ["Alice"])
         #expect(!result.entities.isEmpty)
         #expect(result.entities[0].label == "Alice")
         #expect(result.entities[0].type == "ex:Person")
@@ -76,7 +76,7 @@ struct MemoryIntegrationTests {
             triple:ex:person/alice,ex:worksAt,ex:org/acme
             """)
 
-        let result = try await memory.recall(keywords: ["Alice"])
+        let result = try await memory.associate(cues: ["Alice"])
         let iris = result.entities.map(\.iri)
         #expect(iris.contains("ex:person/alice"))
         #expect(iris.contains("ex:org/acme"))
@@ -91,7 +91,7 @@ struct MemoryIntegrationTests {
         batch.triple("ex:person/bob", "rdfs:label", "Bob")
         try await memory.store(batch)
 
-        let result = try await memory.recall(keywords: ["Bob"])
+        let result = try await memory.associate(cues: ["Bob"])
         #expect(!result.entities.isEmpty)
         #expect(result.entities[0].label == "Bob")
     }
@@ -101,14 +101,14 @@ struct MemoryIntegrationTests {
         let memory = try await Memory(path: nil, encoding: TripleEncoding())
         try await memory.store("triple:ex:person/alice,rdf:type,ex:Person; triple:ex:person/alice,rdfs:label,Alice")
 
-        let result = try await memory.recall(keywords: ["Nonexistent"])
+        let result = try await memory.associate(cues: ["Nonexistent"])
         #expect(result.entities.isEmpty)
     }
 
     @Test("Recall with empty keywords returns empty")
     func recallEmptyKeywords() async throws {
         let memory = try await Memory(path: nil, encoding: PassthroughEncoding())
-        let result = try await memory.recall(keywords: [])
+        let result = try await memory.associate(cues: [])
         #expect(result.entities.isEmpty)
     }
 
@@ -119,7 +119,7 @@ struct MemoryIntegrationTests {
         try await memory.store("triple:ex:person/bob,rdf:type,ex:Person; triple:ex:person/bob,rdfs:label,Bob")
         try await memory.store("triple:ex:person/alice,ex:worksAt,ex:person/bob")
 
-        let result = try await memory.recall(keywords: ["Alice"])
+        let result = try await memory.associate(cues: ["Alice"])
         let iris = result.entities.map(\.iri)
         #expect(iris.contains("ex:person/alice"))
         #expect(iris.contains("ex:person/bob"))

@@ -1,23 +1,19 @@
 // RecallEngine.swift
-// Spreading activation associative memory recall
+// Spreading activation associative memory
 
 import Foundation
 import Database
+import os.log
 
-/// Recall Engine — spreading activation over the knowledge graph.
+private let logger = Logger(subsystem: "com.memory", category: "RecallEngine")
+
+/// Associative memory recall via spreading activation.
 ///
-/// Mimics human associative memory:
-/// 1. Keywords match entity labels → seed entities
-/// 2. Activation spreads bidirectionally through relationships
-/// 3. Entities reached by multiple paths score higher (convergence)
-/// 4. Results sorted by score, with traversal paths for explainability
-///
-/// Metadata predicates (rdf:type, rdfs:label) are excluded from spreading
-/// to prevent structural noise from dominating content relationships.
+/// Given cues (keywords), finds seed entities by label match,
+/// then spreads activation bidirectionally through the graph.
+/// Entities reached from multiple cues score higher (convergence).
 public struct RecallEngine: Sendable {
 
-    /// Predicates excluded from spreading activation.
-    /// These are structural metadata, not content relationships.
     private static let excludedPredicates: Set<String> = [
         "rdf:type",
         "rdfs:label",
@@ -31,23 +27,18 @@ public struct RecallEngine: Sendable {
     }
 
     /// Execute a recall query.
-    ///
-    /// - Keywords trigger spreading activation over the knowledge graph
-    /// - Embedding triggers vector similarity search on Given Store
     public func execute(_ query: RecallQuery) async throws -> RecallResult {
         var entities: [RecalledEntity] = []
         var givens: [Given] = []
 
-        // Spreading activation on Knowledge Store
         if !query.keywords.isEmpty {
-            entities = try await spreadingActivation(
-                keywords: query.keywords,
+            entities = try await associate(
+                cues: query.keywords,
                 maxHops: query.maxHops,
                 limit: query.limit
             )
         }
 
-        // Vector similarity on Given Store
         if let embedding = query.embedding {
             givens = try await searchGivens(embedding: embedding, limit: query.limit)
         }
@@ -55,30 +46,29 @@ public struct RecallEngine: Sendable {
         return RecallResult(entities: entities, givens: givens)
     }
 
-    // MARK: - Spreading Activation
+    // MARK: - Associate
 
     /// Core spreading activation algorithm.
     ///
-    /// 1. Name recall: find entities whose rdfs:label contains any keyword
+    /// 1. Name recall: find entities whose rdfs:label contains any cue
     /// 2. Spread activation bidirectionally up to maxHops
-    /// 3. Score by convergence (number of paths reaching each entity)
+    /// 3. Score by convergence (paths reaching each entity)
     /// 4. Resolve labels and types, sort by score
-    private func spreadingActivation(
-        keywords: [String],
+    private func associate(
+        cues: [String],
         maxHops: Int,
         limit: Int
     ) async throws -> [RecalledEntity] {
 
-        // Activation map: IRI → (count, paths)
         var activation: [String: (count: Int, paths: [String])] = [:]
 
         // Step 1: Name recall — find seed entities
         var seedIRIs: Set<String> = []
-        for keyword in keywords {
+        for cue in cues {
             let result = try await context.fdbContext.sparql(Statement.self)
                 .defaultIndex()
                 .where("?entity", "rdfs:label", "?label")
-                .filter("?label", contains: keyword)
+                .filter("?label", contains: cue)
                 .select(["?entity"])
                 .execute()
 
@@ -89,83 +79,23 @@ public struct RecallEngine: Sendable {
             }
         }
 
-        // Step 2: Spread activation from each seed
+        logger.info("[associate] cues=\(cues) seeds=\(seedIRIs.count)")
+        guard !seedIRIs.isEmpty else { return [] }
+
+        // Step 2: Spread from each seed
         for seedIRI in seedIRIs {
-            // Activate seed itself
             activate(&activation, iri: seedIRI, path: "direct match")
-
-            // 1-hop outgoing: seed → ?rel → ?target
-            let hop1Out = try await context.fdbContext.sparql(Statement.self)
-                .defaultIndex()
-                .where(seedIRI, "?rel", "?target")
-                .select(["?target", "?rel"])
-                .execute()
-
-            for binding in hop1Out.bindings {
-                guard let target = binding.string("?target"),
-                      let rel = binding.string("?rel"),
-                      !Self.excludedPredicates.contains(rel),
-                      !target.hasPrefix("\"") else { continue }
-
-                activate(&activation, iri: target, path: "\(seedIRI) --[\(rel)]--> \(target)")
-
-                // 2-hop from outgoing target
-                if maxHops >= 2 {
-                    let hop2 = try await context.fdbContext.sparql(Statement.self)
-                        .defaultIndex()
-                        .where(target, "?rel2", "?target2")
-                        .select(["?target2", "?rel2"])
-                        .execute()
-
-                    for b2 in hop2.bindings {
-                        guard let target2 = b2.string("?target2"),
-                              let rel2 = b2.string("?rel2"),
-                              !Self.excludedPredicates.contains(rel2),
-                              !target2.hasPrefix("\""),
-                              target2 != seedIRI else { continue }
-
-                        activate(&activation, iri: target2,
-                                 path: "\(seedIRI) → \(target) --[\(rel2)]--> \(target2)")
-                    }
-                }
-            }
-
-            // 1-hop incoming: ?source → ?rel → seed
-            let hop1In = try await context.fdbContext.sparql(Statement.self)
-                .defaultIndex()
-                .where("?source", "?rel", seedIRI)
-                .select(["?source", "?rel"])
-                .execute()
-
-            for binding in hop1In.bindings {
-                guard let source = binding.string("?source"),
-                      let rel = binding.string("?rel"),
-                      !Self.excludedPredicates.contains(rel) else { continue }
-
-                activate(&activation, iri: source, path: "\(source) --[\(rel)]--> \(seedIRI)")
-
-                // 2-hop from incoming source
-                if maxHops >= 2 {
-                    let hop2 = try await context.fdbContext.sparql(Statement.self)
-                        .defaultIndex()
-                        .where("?source2", "?rel2", source)
-                        .select(["?source2", "?rel2"])
-                        .execute()
-
-                    for b2 in hop2.bindings {
-                        guard let source2 = b2.string("?source2"),
-                              let rel2 = b2.string("?rel2"),
-                              !Self.excludedPredicates.contains(rel2),
-                              source2 != seedIRI else { continue }
-
-                        activate(&activation, iri: source2,
-                                 path: "\(source2) --[\(rel2)]--> \(source) → \(seedIRI)")
-                    }
-                }
-            }
+            try await spread(
+                from: seedIRI,
+                seedIRI: seedIRI,
+                hop: 1,
+                maxHops: maxHops,
+                visited: [seedIRI],
+                activation: &activation
+            )
         }
 
-        // Step 3: Resolve labels and types, build results
+        // Step 3: Resolve labels and types
         var results: [RecalledEntity] = []
         for (iri, entry) in activation {
             let label = try await resolveLabel(for: iri)
@@ -179,9 +109,78 @@ public struct RecallEngine: Sendable {
             ))
         }
 
-        // Step 4: Sort by score descending, limit
+        // Step 4: Sort by score descending
         results.sort { $0.score > $1.score }
+        logger.info("[associate] results=\(results.count)")
         return Array(results.prefix(limit))
+    }
+
+    /// Recursive bidirectional spread.
+    private func spread(
+        from iri: String,
+        seedIRI: String,
+        hop: Int,
+        maxHops: Int,
+        visited: Set<String>,
+        activation: inout [String: (count: Int, paths: [String])]
+    ) async throws {
+        guard hop <= maxHops else { return }
+
+        // Outgoing: iri → ?rel → ?target
+        let outgoing = try await context.fdbContext.sparql(Statement.self)
+            .defaultIndex()
+            .where(iri, "?rel", "?target")
+            .select(["?target", "?rel"])
+            .execute()
+
+        for binding in outgoing.bindings {
+            guard let target = binding.string("?target"),
+                  let rel = binding.string("?rel"),
+                  !Self.excludedPredicates.contains(rel),
+                  !target.hasPrefix("\""),
+                  !visited.contains(target) else { continue }
+
+            activate(&activation, iri: target, path: "\(iri) --[\(rel)]--> \(target)")
+
+            // Continue spreading
+            var nextVisited = visited
+            nextVisited.insert(target)
+            try await spread(
+                from: target,
+                seedIRI: seedIRI,
+                hop: hop + 1,
+                maxHops: maxHops,
+                visited: nextVisited,
+                activation: &activation
+            )
+        }
+
+        // Incoming: ?source → ?rel → iri
+        let incoming = try await context.fdbContext.sparql(Statement.self)
+            .defaultIndex()
+            .where("?source", "?rel", iri)
+            .select(["?source", "?rel"])
+            .execute()
+
+        for binding in incoming.bindings {
+            guard let source = binding.string("?source"),
+                  let rel = binding.string("?rel"),
+                  !Self.excludedPredicates.contains(rel),
+                  !visited.contains(source) else { continue }
+
+            activate(&activation, iri: source, path: "\(source) --[\(rel)]--> \(iri)")
+
+            var nextVisited = visited
+            nextVisited.insert(source)
+            try await spread(
+                from: source,
+                seedIRI: seedIRI,
+                hop: hop + 1,
+                maxHops: maxHops,
+                visited: nextVisited,
+                activation: &activation
+            )
+        }
     }
 
     // MARK: - Activation
@@ -197,7 +196,7 @@ public struct RecallEngine: Sendable {
         activation[iri] = entry
     }
 
-    // MARK: - Label / Type Resolution
+    // MARK: - Resolution
 
     private func resolveLabel(for iri: String) async throws -> String {
         let result = try await context.fdbContext.sparql(Statement.self)
@@ -218,7 +217,6 @@ public struct RecallEngine: Sendable {
         return result.bindings.first?.string("?type") ?? ""
     }
 
-    /// Strip RDF literal syntax: "text"@ja → text, "text"^^xsd:string → text
     private func cleanLiteral(_ raw: String) -> String {
         guard raw.hasPrefix("\"") else { return raw }
         if let range = raw.range(of: "\"^^", options: .backwards) {
@@ -235,7 +233,6 @@ public struct RecallEngine: Sendable {
 
     // MARK: - Given Store
 
-    /// Search givens by vector similarity.
     private func searchGivens(embedding: [Float], limit: Int) async throws -> [Given] {
         let results = try await context.fdbContext.findSimilar(Given.self)
             .vector(\.embedding, dimensions: embedding.count)

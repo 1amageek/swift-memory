@@ -145,20 +145,26 @@ public actor Memory {
 
     // MARK: - Recall
 
-    /// Recall from input — LLM extracts query, then spreading activation.
-    public func recall(_ input: any GivenRepresentable) async throws -> RecallResult {
+    // MARK: - Associate
+
+    /// Associative recall — spreading activation from cues.
+    ///
+    /// The primary recall API. Given cues (keywords), finds seed entities
+    /// by label match, spreads activation through the graph, and returns
+    /// entities scored by convergence.
+    public func associate(cues: [String], maxHops: Int = 2, limit: Int = 20) async throws -> RecallResult {
+        try await recallEngine.execute(RecallQuery(keywords: cues, maxHops: maxHops, limit: limit))
+    }
+
+    /// Associative recall from input — LLM extracts cues, then spreading activation.
+    public func associate(_ input: any GivenRepresentable, maxHops: Int = 2, limit: Int = 20) async throws -> RecallResult {
         let query = try await encoding.extractQuery(input)
-        guard !query.keywords.isEmpty || query.embedding != nil else { return .empty }
-        logger.info("[recall] keywords=\(query.keywords)")
-        return try await recallEngine.execute(query)
+        guard !query.keywords.isEmpty else { return .empty }
+        logger.info("[associate] cues=\(query.keywords)")
+        return try await recallEngine.execute(RecallQuery(keywords: query.keywords, maxHops: maxHops, limit: limit))
     }
 
-    /// Recall with explicit keywords.
-    public func recall(keywords: [String], maxHops: Int = 2, limit: Int = 20) async throws -> RecallResult {
-        try await recallEngine.execute(RecallQuery(keywords: keywords, maxHops: maxHops, limit: limit))
-    }
-
-    /// Recall with a full query.
+    /// Low-level recall with a full query.
     public func recall(_ query: RecallQuery) async throws -> RecallResult {
         try await recallEngine.execute(query)
     }
