@@ -150,14 +150,6 @@ public actor Memory {
         try await recallEngine.execute(RecallQuery(keywords: keywords, maxHops: maxHops, limit: limit))
     }
 
-    /// Recall from input — LLM extracts keywords, then spreading activation.
-    public func recall(_ input: any GivenRepresentable, maxHops: Int = 2, limit: Int = 20) async throws -> RecallResult {
-        let query = try await encoding.extractQuery(input)
-        guard !query.keywords.isEmpty else { return .empty }
-        logger.info("[recall] keywords=\(query.keywords)")
-        return try await recallEngine.execute(RecallQuery(keywords: query.keywords, maxHops: maxHops, limit: limit))
-    }
-
     /// Recall with a full query.
     public func recall(_ query: RecallQuery) async throws -> RecallResult {
         try await recallEngine.execute(query)
