@@ -9,11 +9,22 @@ struct PassthroughEncoding: MemoryEncoding {
     func interpret(_ input: any GivenRepresentable) async throws -> MemoryBatch {
         MemoryBatch.empty
     }
+    func extractQuery(_ input: any GivenRepresentable) async throws -> RecallQuery {
+        RecallQuery()
+    }
 }
 
 /// Encoding that creates Statement triples from input text.
 /// Parses "triple:s,p,o" patterns.
 struct TripleEncoding: MemoryEncoding {
+    func extractQuery(_ input: any GivenRepresentable) async throws -> RecallQuery {
+        let content = input.givenRepresentation
+        let words = content.components.compactMap { c -> [String]? in
+            if case .text(let t) = c { return t.value.split(separator: " ").map(String.init) }
+            return nil
+        }.flatMap { $0 }
+        return RecallQuery(keywords: words)
+    }
     func interpret(_ input: any GivenRepresentable) async throws -> MemoryBatch {
         var batch = MemoryBatch()
         let content = input.givenRepresentation
