@@ -2,51 +2,18 @@ import Testing
 import Foundation
 import SwiftMemory
 import MemoryOntology
-import Database
-
-/// Encoding that does nothing — returns empty batch.
-struct PassthroughEncoding: MemoryEncoding {
-    func interpret(_ input: any GivenRepresentable) async throws -> MemoryBatch {
-        MemoryBatch.empty
-    }
-}
-
-/// Encoding that creates Statement triples from input text.
-/// Parses "triple:s,p,o" patterns.
-struct TripleEncoding: MemoryEncoding {
-    func interpret(_ input: any GivenRepresentable) async throws -> MemoryBatch {
-        var batch = MemoryBatch()
-        let content = input.givenRepresentation
-        for component in content.components {
-            if case .text(let text) = component {
-                for line in text.value.split(separator: ";").map({ $0.trimmingCharacters(in: .whitespaces) }) {
-                    if line.hasPrefix("triple:") {
-                        let parts = line.dropFirst("triple:".count).split(separator: ",")
-                        if parts.count == 3 {
-                            batch.triple(String(parts[0]), String(parts[1]), String(parts[2]))
-                        }
-                    }
-                }
-            }
-        }
-        return batch
-    }
-}
 
 @Suite("Memory Integration Tests", .serialized)
 struct MemoryIntegrationTests {
 
-    @Test("Store with empty batch discards materials")
-    func storeEmptyBatchDiscardsGivens() async throws {
-        let memory = try await Memory(path: nil, encoding: PassthroughEncoding())
-        try await memory.store("Cherry blossoms are beautiful")
-        // PassthroughEncoding returns empty → materials discarded, nothing saved
-    }
+    @Test("Store batch and recall by label")
+    func storeBatchAndRecall() async throws {
+        let memory = try await Memory(path: nil)
 
-    @Test("Store and recall via triples")
-    func storeAndRecallViaTriples() async throws {
-        let memory = try await Memory(path: nil, encoding: TripleEncoding())
-        try await memory.store("triple:ex:person/alice,rdf:type,ex:Person; triple:ex:person/alice,rdfs:label,Alice")
+        var batch = MemoryBatch()
+        batch.triple("ex:person/alice", "rdf:type", "ex:Person")
+        batch.triple("ex:person/alice", "rdfs:label", "Alice")
+        try await memory.store(batch)
 
         let result = try await memory.recall(keywords: ["Alice"])
         #expect(!result.entities.isEmpty)
@@ -56,14 +23,15 @@ struct MemoryIntegrationTests {
 
     @Test("Spreading activation through relationships")
     func spreadingActivation() async throws {
-        let memory = try await Memory(path: nil, encoding: TripleEncoding())
-        try await memory.store("""
-            triple:ex:person/alice,rdf:type,ex:Person; \
-            triple:ex:person/alice,rdfs:label,Alice; \
-            triple:ex:org/acme,rdf:type,ex:Organization; \
-            triple:ex:org/acme,rdfs:label,Acme; \
-            triple:ex:person/alice,ex:worksAt,ex:org/acme
-            """)
+        let memory = try await Memory(path: nil)
+
+        var batch = MemoryBatch()
+        batch.triple("ex:person/alice", "rdf:type", "ex:Person")
+        batch.triple("ex:person/alice", "rdfs:label", "Alice")
+        batch.triple("ex:org/acme", "rdf:type", "ex:Organization")
+        batch.triple("ex:org/acme", "rdfs:label", "Acme")
+        batch.triple("ex:person/alice", "ex:worksAt", "ex:org/acme")
+        try await memory.store(batch)
 
         let result = try await memory.recall(keywords: ["Alice"])
         let iris = result.entities.map(\.iri)
@@ -71,42 +39,20 @@ struct MemoryIntegrationTests {
         #expect(iris.contains("ex:org/acme"))
     }
 
-    @Test("Store batch directly")
-    func storeBatchDirectly() async throws {
-        let memory = try await Memory(path: nil, encoding: PassthroughEncoding())
-
-        var batch = MemoryBatch()
-        batch.triple("ex:person/bob", "rdf:type", "ex:Person")
-        batch.triple("ex:person/bob", "rdfs:label", "Bob")
-        try await memory.store(batch)
-
-        let result = try await memory.recall(keywords: ["Bob"])
-        #expect(!result.entities.isEmpty)
-        #expect(result.entities[0].label == "Bob")
-    }
-
-    @Test("Recall with no match returns empty")
-    func recallNoMatch() async throws {
-        let memory = try await Memory(path: nil, encoding: TripleEncoding())
-        try await memory.store("triple:ex:person/alice,rdf:type,ex:Person; triple:ex:person/alice,rdfs:label,Alice")
-
-        let result = try await memory.recall(keywords: ["Nonexistent"])
-        #expect(result.entities.isEmpty)
-    }
-
-    @Test("Recall with empty keywords returns empty")
-    func recallEmptyKeywords() async throws {
-        let memory = try await Memory(path: nil, encoding: PassthroughEncoding())
-        let result = try await memory.recall(keywords: [])
-        #expect(result.entities.isEmpty)
-    }
-
     @Test("Multiple stores accumulate knowledge")
     func multipleStores() async throws {
-        let memory = try await Memory(path: nil, encoding: TripleEncoding())
-        try await memory.store("triple:ex:person/alice,rdf:type,ex:Person; triple:ex:person/alice,rdfs:label,Alice")
-        try await memory.store("triple:ex:person/bob,rdf:type,ex:Person; triple:ex:person/bob,rdfs:label,Bob")
-        try await memory.store("triple:ex:person/alice,ex:worksAt,ex:person/bob")
+        let memory = try await Memory(path: nil)
+
+        var batch1 = MemoryBatch()
+        batch1.triple("ex:person/alice", "rdf:type", "ex:Person")
+        batch1.triple("ex:person/alice", "rdfs:label", "Alice")
+        try await memory.store(batch1)
+
+        var batch2 = MemoryBatch()
+        batch2.triple("ex:person/bob", "rdf:type", "ex:Person")
+        batch2.triple("ex:person/bob", "rdfs:label", "Bob")
+        batch2.triple("ex:person/alice", "ex:worksAt", "ex:person/bob")
+        try await memory.store(batch2)
 
         let result = try await memory.recall(keywords: ["Alice"])
         let iris = result.entities.map(\.iri)
@@ -114,9 +60,35 @@ struct MemoryIntegrationTests {
         #expect(iris.contains("ex:person/bob"))
     }
 
-    @Test("OntologyPolicy validation via Memory")
+    @Test("Recall with no match returns empty")
+    func recallNoMatch() async throws {
+        let memory = try await Memory(path: nil)
+
+        var batch = MemoryBatch()
+        batch.triple("ex:person/alice", "rdf:type", "ex:Person")
+        batch.triple("ex:person/alice", "rdfs:label", "Alice")
+        try await memory.store(batch)
+
+        let result = try await memory.recall(keywords: ["Nonexistent"])
+        #expect(result.entities.isEmpty)
+    }
+
+    @Test("Recall with empty keywords returns empty")
+    func recallEmptyKeywords() async throws {
+        let memory = try await Memory(path: nil)
+        let result = try await memory.recall(keywords: [])
+        #expect(result.entities.isEmpty)
+    }
+
+    @Test("Empty batch is no-op")
+    func emptyBatchNoOp() async throws {
+        let memory = try await Memory(path: nil)
+        try await memory.store(.empty)
+    }
+
+    @Test("OntologyPolicy validation")
     func policyValidation() async throws {
-        let memory = try await Memory(path: nil, encoding: PassthroughEncoding())
+        let memory = try await Memory(path: nil)
         #expect(memory.ontologyPolicy.validate(typeIRI: "ex:Person"))
         #expect(!memory.ontologyPolicy.validate(typeIRI: "ex:Spaceship"))
     }

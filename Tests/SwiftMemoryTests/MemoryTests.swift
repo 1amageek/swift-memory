@@ -2,7 +2,6 @@ import Testing
 import Foundation
 @testable import SwiftMemory
 import MemoryOntology
-import Database
 
 @Suite
 struct MemoryTests {
@@ -32,26 +31,6 @@ struct MemoryTests {
         )
         let merged = a.merging(b)
         #expect(merged.statements.count == 2)
-    }
-
-    @Test
-    func givenRepresentable() {
-        let content = "Hello world".givenRepresentation
-        #expect(content.components.count == 1)
-        if case .text(let text) = content.components[0] {
-            #expect(text.value == "Hello world")
-        } else {
-            Issue.record("Expected text component")
-        }
-    }
-
-    @Test
-    func givenContentMultimodal() {
-        let content = GivenContent(components: [
-            .text(GivenContent.Text(value: "hello")),
-            .image(GivenContent.Image(source: .url(URL(string: "https://example.com/img.png")!))),
-        ])
-        #expect(content.components.count == 2)
     }
 
     @Test

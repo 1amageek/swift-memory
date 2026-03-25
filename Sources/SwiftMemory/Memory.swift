@@ -1,5 +1,5 @@
 // Memory.swift
-// Public API: store / recall
+// Knowledge persistence and recall
 
 import Foundation
 import Database
@@ -10,33 +10,49 @@ private let logger = Logger(subsystem: "com.memory", category: "Memory")
 
 /// Knowledge persistence system for LLM agents.
 ///
+/// Memory stores and recalls knowledge. It does **not** interpret raw input.
+///
+/// Interpretation is the responsibility of an external agent:
+/// - A nested agent (e.g. haiku) analyzes conversation and structures knowledge
+/// - The agent calls `store(batch)` with entities and relationships
+/// - Memory persists them and enables recall via spreading activation
+///
+/// This separation ensures:
+/// - Memory's context is clean — no LLM prompts or interpretation logic
+/// - The interpreting agent can use a cheaper model (cost optimization)
+/// - Interpretation logic lives in a Skill definition, not in code
+///
 /// ```swift
 /// let memory = try await Memory(
 ///     path: "memory.sqlite",
-///     encoding: MyEncoding(),
 ///     entityTypes: [Person.self, Organization.self]
 /// )
 ///
-/// try await memory.store("Alice works at Acme Corp")
+/// // Store (called by the interpreting agent via MCP tool)
+/// var batch = MemoryBatch()
+/// batch.entity(person)
+/// batch.triple("ex:alice", "ex:worksAt", "ex:acme")
+/// try await memory.store(batch)
+///
+/// // Recall (called by Claude via MCP tool)
 /// let result = try await memory.recall(keywords: ["Alice"])
 /// ```
 public actor Memory {
 
     private let context: MemoryContext
     private let container: DBContainer
-    private let encoding: any MemoryEncoding
     private let recallEngine: RecallEngine
 
     public nonisolated let ontologyPolicy: any OntologyPolicy
 
     public init(
         path: String?,
-        encoding: any MemoryEncoding,
         entityTypes: [any Persistable.Type] = [],
         ontologyPolicy: any OntologyPolicy = DefaultOntologyPolicy(),
         graphName: String = "memory:default"
     ) async throws {
         self.ontologyPolicy = ontologyPolicy
+
         let allTypes: [any Persistable.Type] = [Given.self, Statement.self] + entityTypes
         let schema = Schema(allTypes, version: Schema.Version(1, 0, 0))
 
@@ -54,84 +70,23 @@ public actor Memory {
         try await fdbContext.ontology.load(ontologyPolicy.buildOntology())
 
         self.context = MemoryContext(fdbContext: fdbContext, graphName: graphName)
-        self.encoding = encoding
         self.recallEngine = RecallEngine(context: context)
     }
 
     // MARK: - Store
 
-    /// Store input through the full pipeline.
+    /// Store a batch of entities and statements.
     ///
-    /// 1. LLM interprets input via MemoryEncoding
-    /// 2. If batch is empty → discard (nothing worth remembering)
-    /// 3. Save input as Given (LLM found knowledge)
-    /// 4. Insert entities → OntologyIndex auto-syncs triples
-    /// 5. Insert explicit statements
-    /// 6. Atomic save
-    public func store(_ input: any GivenRepresentable) async throws {
-        let batch = try await encoding.interpret(input)
-        guard !batch.entities.isEmpty || !batch.statements.isEmpty else {
-            logger.info("[store] empty batch — nothing saved")
-            return
-        }
-        logger.info("[store] persisting \(batch.entities.count) entities, \(batch.statements.count) statements")
-
-        // Save input as Given
-        let content = input.givenRepresentation
-        for component in content.components {
-            let modality: String
-            let payloadRef: String
-            switch component {
-            case .text(let text):
-                modality = "text"
-                payloadRef = text.value
-            case .image(let image):
-                modality = "image"
-                switch image.source {
-                case .base64(let data, _): payloadRef = data
-                case .url(let url): payloadRef = url.absoluteString
-                }
-            case .audio(let audio):
-                modality = "audio"
-                switch audio.source {
-                case .base64(let data, _): payloadRef = data
-                case .url(let url): payloadRef = url.absoluteString
-                }
-            }
-            context.fdbContext.insert(Given(
-                modality: modality,
-                payloadRef: payloadRef,
-                embedding: [Float](repeating: 0, count: 384),
-                timestamp: Date(),
-                source: "given"
-            ))
-        }
-
-        // Persist entities
-        for entity in batch.entities {
-            context.fdbContext.insert(entity)
-        }
-
-        // Persist explicit statements
-        for record in batch.statements {
-            context.fdbContext.insert(Statement(
-                graph: context.graphName,
-                subject: record.subject,
-                predicate: record.predicate,
-                object: record.object
-            ))
-        }
-
-        try await context.fdbContext.save()
-        logger.info("[store] saved to DB")
-    }
-
-    /// Store a pre-built MemoryBatch directly.
+    /// Entities are inserted as @Persistable records — OntologyIndex
+    /// automatically generates rdf:type and @OWLDataProperty triples.
+    /// Statements are inserted as explicit RDF triples.
     public func store(_ batch: MemoryBatch) async throws {
         guard !batch.entities.isEmpty || !batch.statements.isEmpty else { return }
+
         for entity in batch.entities {
             context.fdbContext.insert(entity)
         }
+
         for record in batch.statements {
             context.fdbContext.insert(Statement(
                 graph: context.graphName,
@@ -140,7 +95,9 @@ public actor Memory {
                 object: record.object
             ))
         }
+
         try await context.fdbContext.save()
+        logger.info("[store] \(batch.entities.count) entities, \(batch.statements.count) statements")
     }
 
     // MARK: - Recall
