@@ -23,5 +23,6 @@
 /// }
 /// ```
 public protocol MemoryBatchConvertible: Sendable {
-    func toBatch() -> MemoryBatch
+    /// Convert to MemoryBatch, linking all entities to the given ID.
+    func toBatch(givenID: String) -> MemoryBatch
 }

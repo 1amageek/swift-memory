@@ -4,31 +4,41 @@ Knowledge persistence and associative recall for LLM agents.
 
 ## Design Philosophy
 
-Memory stores and recalls knowledge. It does **not** interpret raw input.
+Memory is the whole — a system that holds what has been given and what has been understood, and reactivates them on demand.
 
-Interpretation is the responsibility of an **external agent**:
+Memory contains two kinds of content:
 
-1. A nested agent (e.g. haiku) analyzes conversation and structures knowledge
-2. The agent calls `Memory.store(batch)` with entities and relationships
-3. Memory persists them and enables recall via spreading activation
+- **Given** — what is presented as material for interpretation: text, images, events. Not yet structured, but not nothing — the ground on which meaning is built.
+- **Knowledge** — structured relationships between concepts, expressed as statements (subject–predicate–object). The stable product of interpretation.
 
-This separation ensures:
+**Concept** mediates between them. It is the operation that carves distinctions in the Given, groups what belongs together, and places things in relation. Concept is not stored — it is a dynamic act performed by an external agent (LLM, VLM, rules). Each time input arrives, the agent interprets Given into Knowledge through Concept. Each time recall occurs, Concept is reconstructed from what Memory holds.
 
-- **Clean context** — Memory holds no LLM prompts or interpretation logic
-- **Cost optimization** — The interpreting agent can use a cheaper model
-- **Flexible deployment** — Interpretation logic lives in a Skill, not in code
+This means Memory persists **Given** and **Knowledge**, while **Concept** lives outside — in the interpreting agent. The cycle is:
 
 ```
-Parent Agent (conversation with user)
-  │
-  ├─→ Nested Agent (haiku, cost-efficient)
-  │     Analyzes conversation
-  │     Structures entities + relationships
-  │     Calls store() via MCP tool
-  │
-  └─→ recall() via MCP tool
-       Spreading activation on knowledge graph
-       Returns entities scored by convergence
+Given → Concept (external) → Knowledge → shapes future interpretation of Given
+```
+
+**Grounding** is not a separate layer. It is a kind of Knowledge — statements that bind a Given to its interpretation ("this conversation produced this understanding").
+
+## Data Flow
+
+```
+Input
+  ↓
+Concept (external agent: LLM / VLM / rules)
+  ├─ selects sensory material      → Given  (vector embedding)
+  └─ structures relationships      → Knowledge (RDF statements)
+  ↓
+Memory.store(batch)
+  ├─ Given Store   (vector index, 384d cosine)
+  └─ Knowledge Store (graph index, triple store)
+
+Memory.recall(query)
+  ├─ Vector similarity search  → givens
+  └─ Spreading activation      → entities
+  ↓
+RecallResult (givens + entities)
 ```
 
 ## API
@@ -39,29 +49,45 @@ let memory = try await Memory(
     entityTypes: [Person.self, Organization.self]
 )
 
-// Store — called by the interpreting agent
+// Store — called by the interpreting agent (Concept)
 var batch = MemoryBatch()
-batch.entity(person)            // @OWLClass Persistable
-batch.triple(s, p, o)           // Explicit relationship
+batch.entity(person)                              // @OWLClass Persistable
+batch.triple("ex:alice", "ex:worksAt", "ex:acme") // Explicit relationship
 try await memory.store(batch)
 
-// Recall — spreading activation from keywords
+// Recall — reactivates what Memory holds
 let result = try await memory.recall(keywords: ["Alice", "auth"])
 for entity in result.entities {
-    print("\(entity.label) (\(entity.type), score: \(entity.score))")
+    print("\(entity.label) (score: \(entity.score))")
+}
+for given in result.givens {
+    print("\(given.modality): \(given.payloadRef)")
 }
 ```
 
-## Modules
+### RecallQuery
 
-| Module | Purpose |
-|--------|---------|
-| `SwiftMemory` | Core: Memory actor, MemoryBatch, RecallEngine, Given, Statement |
-| `MemoryOntology` | OntologyPolicy protocol + DefaultOntologyPolicy (26 primitives) |
+Recall supports two strategies, usable independently or together:
+
+```swift
+// Keywords: spreading activation on Knowledge graph
+let result = try await memory.recall(keywords: ["Alice"], maxHops: 2, limit: 20)
+
+// Embedding: vector similarity on Given store
+let result = try await memory.recall(RecallQuery(embedding: vector, limit: 10))
+
+// Both: combined recall
+let result = try await memory.recall(RecallQuery(
+    keywords: ["Alice"],
+    embedding: vector,
+    maxHops: 2,
+    limit: 20
+))
+```
 
 ## Recall: Spreading Activation
 
-Given keywords (cues), the recall algorithm:
+Given keywords (cues), the recall algorithm reactivates Knowledge:
 
 1. **Name recall** — Find entities whose `rdfs:label` matches any keyword
 2. **Spread** — Traverse relationships bidirectionally up to N hops
@@ -84,6 +110,22 @@ recall(keywords: ["Alice", "auth"])
     acme: reached from Alice only → score 1
 ```
 
+When an embedding is provided, Memory also searches the Given store by vector similarity — returning the raw materials that are semantically closest to the query.
+
+## Key Types
+
+| Type | Role |
+|------|------|
+| `Memory` (actor) | Public API: `store` / `recall` |
+| `Given` | Sensory material with vector embedding (384d cosine) |
+| `Statement` | RDF triple in the knowledge graph (subject–predicate–object) |
+| `MemoryBatch` | Container for entities + statements, produced by external Concept |
+| `MemoryBatchConvertible` | Protocol for types that convert to `MemoryBatch` |
+| `RecallQuery` | Query parameters: keywords, embedding, maxHops, limit |
+| `RecallResult` | Result: `entities` (from graph) + `givens` (from vector search) |
+| `RecalledEntity` | Entity with IRI, label, type, convergence score, and traversal paths |
+| `OntologyPolicy` | Defines allowed classes and properties in the knowledge graph |
+
 ## Entity Types
 
 Entities are `@Persistable @OWLClass` structs defined by the client:
@@ -101,3 +143,10 @@ struct Person {
 ```
 
 When inserted via `Memory.store(batch)`, OntologyIndex automatically generates RDF triples (`rdf:type`, `rdfs:label`, data properties) — enabling SPARQL queries and spreading activation.
+
+## Modules
+
+| Module | Purpose |
+|--------|---------|
+| `SwiftMemory` | Core: Memory actor, MemoryBatch, RecallEngine, Given, Statement |
+| `MemoryOntology` | OntologyPolicy protocol + DefaultOntologyPolicy (26 primitives) |

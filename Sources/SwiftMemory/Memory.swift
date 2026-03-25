@@ -75,18 +75,38 @@ public actor Memory {
 
     // MARK: - Store
 
-    /// Store a batch of entities and statements.
+    /// Store Given + Knowledge atomically.
     ///
-    /// Entities are inserted as @Persistable records — OntologyIndex
-    /// automatically generates rdf:type and @OWLDataProperty triples.
-    /// Statements are inserted as explicit RDF triples.
-    public func store(_ batch: MemoryBatch) async throws {
-        guard !batch.entities.isEmpty || !batch.statements.isEmpty else { return }
+    /// Given is the raw material. Knowledge is the structured interpretation.
+    /// Given is saved only when knowledge is non-empty.
+    /// Entities receive givenID to maintain the Given → Knowledge relationship.
+    public func store(given: any Memorable, knowledge: some MemoryBatchConvertible) async throws {
+        // First check if knowledge is worth keeping
+        let givenID = ULID().ulidString
+        let batch = knowledge.toBatch(givenID: givenID)
 
+        guard !batch.entities.isEmpty || !batch.statements.isEmpty else {
+            logger.info("[store] empty knowledge — nothing saved")
+            return
+        }
+
+        // Save Given (raw material)
+        var givenRecord = Given(
+            modality: given.modality,
+            payloadRef: given.payloadRef,
+            embedding: [Float](repeating: 0, count: 384),
+            timestamp: Date(),
+            source: "given"
+        )
+        givenRecord.id = givenID
+        context.fdbContext.insert(givenRecord)
+
+        // Save entities (OntologyIndex auto-generates triples)
         for entity in batch.entities {
             context.fdbContext.insert(entity)
         }
 
+        // Save explicit relationship statements
         for record in batch.statements {
             context.fdbContext.insert(Statement(
                 graph: context.graphName,
@@ -97,12 +117,24 @@ public actor Memory {
         }
 
         try await context.fdbContext.save()
-        logger.info("[store] \(batch.entities.count) entities, \(batch.statements.count) statements")
+        logger.info("[store] given=\(givenID) entities=\(batch.entities.count) statements=\(batch.statements.count)")
     }
 
-    /// Store from a MemoryBatchConvertible (e.g. @Generable store input).
-    public func store(_ input: some MemoryBatchConvertible) async throws {
-        try await store(input.toBatch())
+    /// Store a batch directly (without Given).
+    public func store(_ batch: MemoryBatch) async throws {
+        guard !batch.entities.isEmpty || !batch.statements.isEmpty else { return }
+        for entity in batch.entities {
+            context.fdbContext.insert(entity)
+        }
+        for record in batch.statements {
+            context.fdbContext.insert(Statement(
+                graph: context.graphName,
+                subject: record.subject,
+                predicate: record.predicate,
+                object: record.object
+            ))
+        }
+        try await context.fdbContext.save()
     }
 
     // MARK: - Recall
