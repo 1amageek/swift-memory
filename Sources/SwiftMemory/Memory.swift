@@ -53,7 +53,7 @@ public actor Memory {
     ) async throws {
         self.ontologyPolicy = ontologyPolicy
 
-        let allTypes: [any Persistable.Type] = [Given.self, Statement.self] + entityTypes
+        let allTypes: [any Persistable.Type] = [Given.self, Statement.self, Trace.self] + entityTypes
         let schema = Schema(allTypes, version: Schema.Version(1, 0, 0))
 
         if let path {
@@ -79,11 +79,10 @@ public actor Memory {
     ///
     /// Given is the raw material. Knowledge is the structured interpretation.
     /// Given is saved only when knowledge is non-empty.
-    /// Entities receive givenID to maintain the Given → Knowledge relationship.
+    /// Trace records link each entity back to its source Given.
     public func store(given: any Memorable, knowledge: some MemoryBatchConvertible) async throws {
-        // First check if knowledge is worth keeping
         let givenID = ULID().ulidString
-        let batch = knowledge.toBatch(givenID: givenID)
+        let batch = knowledge.toBatch()
 
         guard !batch.entities.isEmpty || !batch.statements.isEmpty else {
             logger.info("[store] empty knowledge — nothing saved")
@@ -106,6 +105,11 @@ public actor Memory {
             context.fdbContext.insert(entity)
         }
 
+        // Create Trace records linking Given → Entity
+        for entityID in batch.entityIDs {
+            context.fdbContext.insert(Trace(givenID: givenID, entityID: entityID))
+        }
+
         // Save explicit relationship statements
         for record in batch.statements {
             context.fdbContext.insert(Statement(
@@ -117,14 +121,14 @@ public actor Memory {
         }
 
         try await context.fdbContext.save()
-        logger.info("[store] given=\(givenID) entities=\(batch.entities.count) statements=\(batch.statements.count)")
+        logger.info("[store] given=\(givenID) entities=\(batch.entities.count) traces=\(batch.entityIDs.count) statements=\(batch.statements.count)")
     }
 
     /// Store Given + Knowledge from raw data and a decode closure.
     /// Used by MCP tool handler where knowledge comes as JSON Data.
-    public func store(given: any Memorable, knowledgeData: Data, decode: @Sendable (Data, String) throws -> MemoryBatch) async throws {
+    public func store(given: any Memorable, knowledgeData: Data, decode: @Sendable (Data) throws -> MemoryBatch) async throws {
         let givenID = ULID().ulidString
-        let batch = try decode(knowledgeData, givenID)
+        let batch = try decode(knowledgeData)
 
         guard !batch.entities.isEmpty || !batch.statements.isEmpty else {
             logger.info("[store] empty knowledge — nothing saved")
@@ -144,6 +148,9 @@ public actor Memory {
         for entity in batch.entities {
             context.fdbContext.insert(entity)
         }
+        for entityID in batch.entityIDs {
+            context.fdbContext.insert(Trace(givenID: givenID, entityID: entityID))
+        }
         for record in batch.statements {
             context.fdbContext.insert(Statement(
                 graph: context.graphName,
@@ -154,7 +161,7 @@ public actor Memory {
         }
 
         try await context.fdbContext.save()
-        logger.info("[store] given=\(givenID) entities=\(batch.entities.count) statements=\(batch.statements.count)")
+        logger.info("[store] given=\(givenID) entities=\(batch.entities.count) traces=\(batch.entityIDs.count) statements=\(batch.statements.count)")
     }
 
     /// Store a batch directly (without Given).

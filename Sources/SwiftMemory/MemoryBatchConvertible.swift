@@ -23,6 +23,9 @@
 /// }
 /// ```
 public protocol MemoryBatchConvertible: Sendable {
-    /// Convert to MemoryBatch, linking all entities to the given ID.
-    func toBatch(givenID: String) -> MemoryBatch
+    /// Convert to MemoryBatch.
+    ///
+    /// Given→Entity provenance is handled automatically by Memory via Trace records.
+    /// Implementations do not need to manage givenID.
+    func toBatch() -> MemoryBatch
 }
