@@ -14,10 +14,6 @@ public struct MemoryBatch: Sendable {
     /// OntologyIndex auto-syncs rdf:type + @OWLDataProperty triples on insert.
     public var entities: [any Persistable & Sendable]
 
-    /// Entity IDs collected during `entity()` calls.
-    /// Used by `Memory.store()` to create Trace records.
-    public var entityIDs: [String]
-
     /// Explicit relationship triples beyond what OntologyIndex generates.
     /// e.g. ("Alice", "ex:worksAt", "Acme") — inter-entity relationships.
     public var statements: [StatementRecord]
@@ -29,7 +25,6 @@ public struct MemoryBatch: Sendable {
         statements: [StatementRecord] = []
     ) {
         self.entities = entities
-        self.entityIDs = []
         self.statements = statements
     }
 
@@ -38,7 +33,6 @@ public struct MemoryBatch: Sendable {
     /// Add a typed @OWLClass entity.
     public mutating func entity(_ entity: some Persistable & Sendable) {
         entities.append(entity)
-        entityIDs.append("\(entity.id)")
     }
 
     /// Add an explicit relationship triple.
@@ -53,13 +47,17 @@ public struct MemoryBatch: Sendable {
     // MARK: - Merge
 
     public func merging(_ other: MemoryBatch) -> MemoryBatch {
-        var merged = MemoryBatch(
+        MemoryBatch(
             entities: entities + other.entities,
             statements: statements + other.statements
         )
-        merged.entityIDs = entityIDs + other.entityIDs
-        return merged
     }
+}
+
+// MARK: - MemoryBatchConvertible
+
+extension MemoryBatch: MemoryBatchConvertible {
+    public func toBatch() -> MemoryBatch { self }
 }
 
 // MARK: - Statement Record

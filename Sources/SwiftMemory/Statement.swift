@@ -35,4 +35,14 @@ public struct Statement: Hashable {
 
     /// Object IRI or literal value.
     public var object: String = ""
+
+    /// Generate a content-addressable ID from triple components.
+    ///
+    /// Same triple content always produces the same ID,
+    /// enabling upsert semantics and deduplication.
+    public static func contentID(
+        graph: String, subject: String, predicate: String, object: String
+    ) -> String {
+        "\(graph)|\(subject)|\(predicate)|\(object)"
+    }
 }

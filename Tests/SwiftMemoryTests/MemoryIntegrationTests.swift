@@ -92,4 +92,72 @@ struct MemoryIntegrationTests {
         #expect(memory.ontologyPolicy.validate(typeIRI: "ex:Person"))
         #expect(!memory.ontologyPolicy.validate(typeIRI: "ex:Spaceship"))
     }
+
+    @Test("Statement deduplication — same triple from different Givens")
+    func statementDeduplication() async throws {
+        let memory = try await Memory(path: nil)
+
+        // Setup: create entities with labels for recall
+        var setup = MemoryBatch()
+        setup.triple("ex:person/alice", "rdf:type", "ex:Person")
+        setup.triple("ex:person/alice", "rdfs:label", "Alice")
+        setup.triple("ex:org/acme", "rdf:type", "ex:Organization")
+        setup.triple("ex:org/acme", "rdfs:label", "Acme")
+        try await memory.store(setup)
+
+        // Store same relationship from two different Givens
+        var batch1 = MemoryBatch()
+        batch1.triple("ex:person/alice", "ex:worksAt", "ex:org/acme")
+        try await memory.store(given: "Email from Alice mentioning Acme", knowledge: batch1)
+
+        var batch2 = MemoryBatch()
+        batch2.triple("ex:person/alice", "ex:worksAt", "ex:org/acme")
+        try await memory.store(given: "Meeting notes confirming Alice at Acme", knowledge: batch2)
+
+        // Same triple content → same Statement ID (content-addressable)
+        let id1 = Statement.contentID(
+            graph: "memory:default",
+            subject: "ex:person/alice",
+            predicate: "ex:worksAt",
+            object: "ex:org/acme"
+        )
+        let id2 = Statement.contentID(
+            graph: "memory:default",
+            subject: "ex:person/alice",
+            predicate: "ex:worksAt",
+            object: "ex:org/acme"
+        )
+        #expect(id1 == id2)
+
+        // Recall should find Alice via spreading activation
+        let result = try await memory.recall(keywords: ["Alice"])
+        let iris = result.entities.map(\.iri)
+        #expect(iris.contains("ex:person/alice"))
+    }
+
+    @Test("Statement contentID is deterministic")
+    func statementContentID() async throws {
+        let id1 = Statement.contentID(
+            graph: "memory:default",
+            subject: "ex:person/alice",
+            predicate: "ex:worksAt",
+            object: "ex:org/acme"
+        )
+        let id2 = Statement.contentID(
+            graph: "memory:default",
+            subject: "ex:person/alice",
+            predicate: "ex:worksAt",
+            object: "ex:org/acme"
+        )
+        #expect(id1 == id2)
+
+        // Different triple → different ID
+        let id3 = Statement.contentID(
+            graph: "memory:default",
+            subject: "ex:person/bob",
+            predicate: "ex:worksAt",
+            object: "ex:org/acme"
+        )
+        #expect(id1 != id3)
+    }
 }

@@ -79,7 +79,7 @@ public actor Memory {
     ///
     /// Given is the raw material. Knowledge is the structured interpretation.
     /// Given is saved only when knowledge is non-empty.
-    /// Trace records link each entity back to its source Given.
+    /// Trace records link each Statement back to its source Given.
     public func store(given: any Memorable, knowledge: some MemoryBatchConvertible) async throws {
         let givenID = ULID().ulidString
         let batch = knowledge.toBatch()
@@ -105,23 +105,32 @@ public actor Memory {
             context.fdbContext.insert(entity)
         }
 
-        // Create Trace records linking Given → Entity
-        for entityID in batch.entityIDs {
-            context.fdbContext.insert(Trace(givenID: givenID, entityID: entityID))
-        }
-
-        // Save explicit relationship statements
+        // Save explicit relationship statements and create Trace records
         for record in batch.statements {
-            context.fdbContext.insert(Statement(
+            let statementID = Statement.contentID(
                 graph: context.graphName,
                 subject: record.subject,
                 predicate: record.predicate,
                 object: record.object
-            ))
+            )
+            var statement = Statement(
+                graph: context.graphName,
+                subject: record.subject,
+                predicate: record.predicate,
+                object: record.object
+            )
+            statement.id = statementID
+            context.fdbContext.insert(statement)
+
+            var trace = Trace()
+            trace.id = "\(givenID)|\(statementID)"
+            trace.givenID = givenID
+            trace.statementID = statementID
+            context.fdbContext.insert(trace)
         }
 
         try await context.fdbContext.save()
-        logger.info("[store] given=\(givenID) entities=\(batch.entities.count) traces=\(batch.entityIDs.count) statements=\(batch.statements.count)")
+        logger.info("[store] given=\(givenID) entities=\(batch.entities.count) traces=\(batch.statements.count) statements=\(batch.statements.count)")
     }
 
     /// Store Given + Knowledge from raw data and a decode closure.
@@ -148,35 +157,54 @@ public actor Memory {
         for entity in batch.entities {
             context.fdbContext.insert(entity)
         }
-        for entityID in batch.entityIDs {
-            context.fdbContext.insert(Trace(givenID: givenID, entityID: entityID))
-        }
         for record in batch.statements {
-            context.fdbContext.insert(Statement(
+            let statementID = Statement.contentID(
                 graph: context.graphName,
                 subject: record.subject,
                 predicate: record.predicate,
                 object: record.object
-            ))
+            )
+            var statement = Statement(
+                graph: context.graphName,
+                subject: record.subject,
+                predicate: record.predicate,
+                object: record.object
+            )
+            statement.id = statementID
+            context.fdbContext.insert(statement)
+
+            var trace = Trace()
+            trace.id = "\(givenID)|\(statementID)"
+            trace.givenID = givenID
+            trace.statementID = statementID
+            context.fdbContext.insert(trace)
         }
 
         try await context.fdbContext.save()
-        logger.info("[store] given=\(givenID) entities=\(batch.entities.count) traces=\(batch.entityIDs.count) statements=\(batch.statements.count)")
+        logger.info("[store] given=\(givenID) entities=\(batch.entities.count) traces=\(batch.statements.count) statements=\(batch.statements.count)")
     }
 
     /// Store a batch directly (without Given).
+    /// No Trace records are created because there is no Given to link from.
     public func store(_ batch: MemoryBatch) async throws {
         guard !batch.entities.isEmpty || !batch.statements.isEmpty else { return }
         for entity in batch.entities {
             context.fdbContext.insert(entity)
         }
         for record in batch.statements {
-            context.fdbContext.insert(Statement(
+            var statement = Statement(
                 graph: context.graphName,
                 subject: record.subject,
                 predicate: record.predicate,
                 object: record.object
-            ))
+            )
+            statement.id = Statement.contentID(
+                graph: context.graphName,
+                subject: record.subject,
+                predicate: record.predicate,
+                object: record.object
+            )
+            context.fdbContext.insert(statement)
         }
         try await context.fdbContext.save()
     }
