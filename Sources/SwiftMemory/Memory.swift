@@ -277,17 +277,15 @@ public actor Memory {
         // Fetch all existing entities from the polymorphic Entity group
         let existingItems = try await context.fdbContext.fetchPolymorphic(T.self)
 
-        // Build lookup: extract (id, label, type, embedding) from each entity
+        // Build lookup: extract (id, label, embedding) from each entity
         var entityIDs: [String] = []
         var entityLabels: [String] = []
-        var entityTypeNames: [String] = []
         var entityEmbeddings: [[Float]] = []
 
         for item in existingItems {
             guard let entity = item as? any Entity else { continue }
             entityIDs.append(String(describing: item.id))
             entityLabels.append(entity.label)
-            entityTypeNames.append(type(of: item).persistableType)
             entityEmbeddings.append(entity.embedding)
         }
 
