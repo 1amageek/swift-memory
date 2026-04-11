@@ -39,7 +39,12 @@ public struct RecallEngine: Sendable {
             )
         }
 
+        // Vector search: use explicit embedding, or auto-embed keywords
         if let embedding = query.embedding {
+            givens = try await searchGivens(embedding: embedding, limit: query.limit)
+        } else if !query.keywords.isEmpty, let provider = context.embeddingProvider {
+            let queryText = query.keywords.joined(separator: " ")
+            let embedding = try await provider.embed(queryText)
             givens = try await searchGivens(embedding: embedding, limit: query.limit)
         }
 
@@ -62,13 +67,13 @@ public struct RecallEngine: Sendable {
 
         var activation: [String: (count: Int, paths: [String])] = [:]
 
-        // Step 1: Name recall — find seed entities
+        // Step 1: Name recall — find seed entities via trigram similarity
         var seedIRIs: Set<String> = []
         for cue in cues {
             let result = try await context.fdbContext.sparql(Statement.self)
                 .defaultIndex()
                 .where("?entity", "rdfs:label", "?label")
-                .filter("?label", contains: cue)
+                .filter("?label", similarTo: cue)
                 .select(["?entity"])
                 .execute()
 

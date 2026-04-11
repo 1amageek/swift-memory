@@ -7,7 +7,7 @@
       "location" : "https://github.com/1amageek/database-framework.git",
       "state" : {
         "branch" : "main",
-        "revision" : "534a9b5063a7c5060d9104cfed1ae5dcd5d89487"
+        "revision" : "5669bde68bb2fb0087d6c6f133784c9b48114da1"
       }
     },
     {
@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/database-kit.git",
       "state" : {
-        "revision" : "1e54af6e07d5e2cd7efb73cb08abe0308a6ae382",
-        "version" : "26.324.0"
+        "revision" : "fbafc44187af6e8b8b9b452a01113fcf31532aee",
+        "version" : "26.411.0"
       }
     },
     {
@@ -42,8 +42,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/storage-kit.git",
       "state" : {
-        "revision" : "a92f62eeb7084b92618869334f3a73ac52e98ac0",
-        "version" : "26.324.1"
+        "branch" : "main",
+        "revision" : "cd04861c57182e207b8056e06d93c1b18deeeb5e"
       }
     },
     {
@@ -85,7 +85,7 @@
     {
       "identity" : "swift-collections",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/apple/swift-collections.git",
+      "location" : "https://github.com/apple/swift-collections",
       "state" : {
         "revision" : "6675bc0ff86e61436e615df6fc5174e043e57924",
         "version" : "1.4.1"
@@ -114,8 +114,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/swift-hnsw.git",
       "state" : {
-        "revision" : "e6af4bb515e11981bb7c2fe8c356a97b0fc3fc77",
-        "version" : "0.2.1"
+        "revision" : "73ffbc10b587ca1c1c9203a580b8d4de7878a26e",
+        "version" : "0.4.0"
       }
     },
     {
@@ -193,7 +193,7 @@
     {
       "identity" : "swift-system",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/apple/swift-system.git",
+      "location" : "https://github.com/apple/swift-system",
       "state" : {
         "revision" : "7c6ad0fc39d0763e0b699210e4124afd5041c5df",
         "version" : "1.6.4"

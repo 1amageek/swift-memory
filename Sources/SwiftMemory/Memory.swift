@@ -49,7 +49,8 @@ public actor Memory {
         path: String?,
         entityTypes: [any Persistable.Type] = [],
         ontologyPolicy: any OntologyPolicy = DefaultOntologyPolicy(),
-        graphName: String = "memory:default"
+        graphName: String = "memory:default",
+        embeddingProvider: (any EmbeddingProvider)? = nil
     ) async throws {
         self.ontologyPolicy = ontologyPolicy
 
@@ -69,7 +70,11 @@ public actor Memory {
         let fdbContext = container.newContext()
         try await fdbContext.ontology.load(ontologyPolicy.buildOntology())
 
-        self.context = MemoryContext(fdbContext: fdbContext, graphName: graphName)
+        self.context = MemoryContext(
+            fdbContext: fdbContext,
+            graphName: graphName,
+            embeddingProvider: embeddingProvider
+        )
         self.recallEngine = RecallEngine(context: context)
     }
 
@@ -89,11 +94,17 @@ public actor Memory {
             return
         }
 
-        // Save Given (raw material)
+        // Save Given (raw material) with embedding if provider is available
+        let embedding: [Float]
+        if let provider = context.embeddingProvider {
+            embedding = try await provider.embed(given.payloadRef)
+        } else {
+            embedding = [Float](repeating: 0, count: Given.embeddingDimensions)
+        }
         var givenRecord = Given(
             modality: given.modality,
             payloadRef: given.payloadRef,
-            embedding: [Float](repeating: 0, count: 384),
+            embedding: embedding,
             timestamp: Date(),
             source: "given"
         )
@@ -144,10 +155,16 @@ public actor Memory {
             return
         }
 
+        let embedding: [Float]
+        if let provider = context.embeddingProvider {
+            embedding = try await provider.embed(given.payloadRef)
+        } else {
+            embedding = [Float](repeating: 0, count: Given.embeddingDimensions)
+        }
         var givenRecord = Given(
             modality: given.modality,
             payloadRef: given.payloadRef,
-            embedding: [Float](repeating: 0, count: 384),
+            embedding: embedding,
             timestamp: Date(),
             source: "given"
         )

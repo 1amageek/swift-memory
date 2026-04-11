@@ -12,6 +12,9 @@ public struct MemoryContext: Sendable {
     /// Named graph for this memory instance.
     public let graphName: String
 
+    /// Optional embedding provider for vector-based recall.
+    public let embeddingProvider: (any EmbeddingProvider)?
+
     /// Default ontology IRI prefix.
     public static let ontologyIRI = "memory:"
 
@@ -22,10 +25,12 @@ public struct MemoryContext: Sendable {
 
     public init(
         fdbContext: FDBContext,
-        graphName: String = "memory:default"
+        graphName: String = "memory:default",
+        embeddingProvider: (any EmbeddingProvider)? = nil
     ) {
         self.fdbContext = fdbContext
         self.graphName = graphName
+        self.embeddingProvider = embeddingProvider
     }
 }
 
