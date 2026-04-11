@@ -10,6 +10,7 @@ let package = Package(
         .library(name: "SwiftMemory", targets: ["SwiftMemory"]),
     ],
     dependencies: [
+        .package(url: "https://github.com/1amageek/database-kit.git", from: "26.0411.2"),
         .package(
             url: "https://github.com/1amageek/database-framework.git",
             branch: "main",
@@ -31,6 +32,8 @@ let package = Package(
             name: "SwiftMemory",
             dependencies: [
                 "MemoryOntology",
+                .product(name: "Core", package: "database-kit"),
+                .product(name: "Vector", package: "database-kit"),
                 .product(name: "Database", package: "database-framework"),
                 .product(name: "Hoot", package: "swift-hoot"),
             ]
