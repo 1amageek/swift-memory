@@ -67,13 +67,13 @@ public struct RecallEngine: Sendable {
 
         var activation: [String: (count: Int, paths: [String])] = [:]
 
-        // Step 1: Name recall — find seed entities via trigram similarity
+        // Step 1: Name recall — find seed entities by label substring match
         var seedIRIs: Set<String> = []
         for cue in cues {
             let result = try await context.fdbContext.sparql(Statement.self)
                 .defaultIndex()
                 .where("?entity", "rdfs:label", "?label")
-                .filter("?label", similarTo: cue)
+                .filter("?label", contains: cue)
                 .select(["?entity"])
                 .execute()
 
