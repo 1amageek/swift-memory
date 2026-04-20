@@ -1,13 +1,12 @@
 {
-  "originHash" : "3de32c44af922a857551967afd72b7b79dbacda56f3d12355025c1f3832c8cb8",
+  "originHash" : "da92dbc2e5b2ec4bc37f7dfebbdc61e6712dd3a221bd635e739cf77c69916bfa",
   "pins" : [
     {
       "identity" : "database-framework",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/database-framework.git",
       "state" : {
-        "branch" : "main",
-        "revision" : "e9defd626b03d6f027065c452eb4a0ff0258cf73"
+        "revision" : "ddecf5a15167d3ccb2146369a795e2395edd4c08"
       }
     },
     {
