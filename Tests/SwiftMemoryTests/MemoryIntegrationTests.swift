@@ -3,6 +3,32 @@ import Foundation
 import SwiftMemory
 import MemoryOntology
 
+/// Deterministic stub used by tests that need a Memory with a provider.
+/// Returns a seeded embedding that depends only on the input text, so two
+/// different strings produce different vectors and identical strings produce
+/// identical vectors.
+private struct StubEmbeddingProvider: EmbeddingProvider {
+    let dimensions: Int = 256
+
+    func embed(_ text: String) async throws -> [Float] {
+        var vec = [Float](repeating: 0, count: dimensions)
+        var hash: UInt64 = 1469598103934665603
+        for byte in text.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1099511628211
+        }
+        var state = hash | 1
+        for i in 0..<dimensions {
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            let bits = Float(bitPattern: 0x3F800000 | UInt32(truncatingIfNeeded: state >> 41))
+            vec[i] = bits - 1.5
+        }
+        let norm = vec.reduce(Float(0)) { $0 + $1 * $1 }.squareRoot()
+        guard norm > 0 else { return vec }
+        return vec.map { $0 / norm }
+    }
+}
+
 @Suite("Memory Integration Tests", .serialized)
 struct MemoryIntegrationTests {
 
@@ -95,7 +121,10 @@ struct MemoryIntegrationTests {
 
     @Test("Statement deduplication — same triple from different Givens")
     func statementDeduplication() async throws {
-        let memory = try await Memory(path: nil)
+        let memory = try await Memory(
+            path: nil,
+            embeddingProvider: StubEmbeddingProvider()
+        )
 
         // Setup: create entities with labels for recall
         var setup = MemoryBatch()

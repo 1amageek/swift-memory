@@ -11,8 +11,10 @@ import Database
 public struct MemoryBatch: Sendable {
 
     /// Typed @OWLClass entities to insert.
-    /// OntologyIndex auto-syncs rdf:type + @OWLDataProperty triples on insert.
-    public var entities: [any Persistable & Sendable]
+    /// Must conform to `Entity` so `Memory.store()` can resolve and dedup them
+    /// via embedding similarity. OntologyIndex auto-syncs rdf:type +
+    /// @OWLDataProperty triples on insert.
+    public var entities: [any Persistable & Entity & Sendable]
 
     /// Explicit relationship triples beyond what OntologyIndex generates.
     /// e.g. ("Alice", "ex:worksAt", "Acme") — inter-entity relationships.
@@ -21,7 +23,7 @@ public struct MemoryBatch: Sendable {
     public static let empty = MemoryBatch(entities: [], statements: [])
 
     public init(
-        entities: [any Persistable & Sendable] = [],
+        entities: [any Persistable & Entity & Sendable] = [],
         statements: [StatementRecord] = []
     ) {
         self.entities = entities
@@ -31,7 +33,7 @@ public struct MemoryBatch: Sendable {
     // MARK: - Builder Methods
 
     /// Add a typed @OWLClass entity.
-    public mutating func entity(_ entity: some Persistable & Sendable) {
+    public mutating func entity(_ entity: some Persistable & Entity & Sendable) {
         entities.append(entity)
     }
 

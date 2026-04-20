@@ -38,4 +38,9 @@ public struct MemoryContext: Sendable {
 public enum MemoryError: Error, Sendable {
     case recallFailed(String)
     case invalidQuery(String)
+
+    /// Thrown when `store()` is called with entities but no embedding provider
+    /// has been configured. Entity resolution (dedup via cosine similarity)
+    /// depends on an `EmbeddingProvider`.
+    case embeddingProviderRequired
 }

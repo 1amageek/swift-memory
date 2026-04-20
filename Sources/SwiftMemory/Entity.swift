@@ -1,6 +1,7 @@
 // Entity.swift
 // Polymorphic protocol for cross-type entity resolution
 
+import Foundation
 import Core
 import Vector
 
@@ -50,11 +51,29 @@ public protocol Entity: Polymorphable {
     /// Used to construct the embedding text and as the resolved label.
     var label: String { get }
 
+    /// Entity class key (e.g., "organizations", "persons").
+    ///
+    /// Used as the first token of the embedding text and for class-level
+    /// pre-filtering during resolution.
+    var entityType: String { get }
+
+    /// Additional discriminating context appended to the embedding text.
+    ///
+    /// Override to include properties that help distinguish entities with
+    /// similar names (domain, email, role, etc.). Default is empty.
+    var resolutionContext: String { get }
+
     /// Embedding vector for similarity-based entity resolution.
     ///
-    /// Generated from the entity's triple: "{entityType} {label} {context}".
-    /// Zero-filled until explicitly populated by `Memory.updateEntityEmbeddings()`.
+    /// Generated from `resolutionEmbeddingText`. Populated by `Memory.store()`
+    /// on first insert.
     var embedding: [Float] { get set }
+
+    /// Creation timestamp. Set on first insert.
+    var created: Date { get set }
+
+    /// Last update timestamp. Refreshed when a resolution match is detected.
+    var updated: Date { get set }
 }
 
 // MARK: - Shared Constants
@@ -66,6 +85,26 @@ extension Entity {
     /// All conforming types must produce embeddings of this size.
     /// Mismatch causes index corruption.
     public static var embeddingDimensions: Int { 256 }
+}
+
+// MARK: - Defaults
+
+extension Entity {
+
+    /// Default: no additional context.
+    public var resolutionContext: String { "" }
+
+    /// Text used to compute the entity's embedding vector.
+    ///
+    /// Format: `"{entityType} {label}"` or `"{entityType} {label} {context}"`
+    /// depending on whether `resolutionContext` is empty.
+    public var resolutionEmbeddingText: String {
+        let trimmedContext = resolutionContext.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedContext.isEmpty {
+            return "\(entityType) \(label)"
+        }
+        return "\(entityType) \(label) \(trimmedContext)"
+    }
 }
 
 // MARK: - Polymorphable Conformance

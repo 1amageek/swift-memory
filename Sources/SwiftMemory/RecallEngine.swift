@@ -39,12 +39,10 @@ public struct RecallEngine: Sendable {
             )
         }
 
-        // Vector search: use explicit embedding, or auto-embed keywords
+        // Vector search over Given: only when an explicit query embedding is
+        // provided. Keyword-only recall does not auto-embed because the
+        // decision to run a vector search should be made by the caller.
         if let embedding = query.embedding {
-            givens = try await searchGivens(embedding: embedding, limit: query.limit)
-        } else if !query.keywords.isEmpty, let provider = context.embeddingProvider {
-            let queryText = query.keywords.joined(separator: " ")
-            let embedding = try await provider.embed(queryText)
             givens = try await searchGivens(embedding: embedding, limit: query.limit)
         }
 
