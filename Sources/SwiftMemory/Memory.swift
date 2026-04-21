@@ -402,6 +402,139 @@ public actor Memory {
         return results
     }
 
+    // MARK: - Test Support
+
+    /// Count entities stored under the shared polymorphic directory for the
+    /// given witness type. Exposed for `@testable` so dedup tests can assert
+    /// on persisted entity counts.
+    internal func _debugEntityCount<T: Persistable & Entity>(witness: T.Type) async throws -> Int {
+        try await context.fdbContext.fetchPolymorphic(T.self).count
+    }
+
+    /// Fetch all entities stored under the shared polymorphic directory for
+    /// the given witness type. Exposed for `@testable` so dedup tests can
+    /// inspect `created`/`updated` timestamps after resolution.
+    internal func _debugEntities<T: Persistable & Entity>(witness: T.Type) async throws -> [any Persistable] {
+        try await context.fdbContext.fetchPolymorphic(T.self)
+    }
+
+    /// Fetch a concrete Persistable type directly (non-polymorphic).
+    /// Exposed for `@testable` diagnostics.
+    internal func _debugFetchAll<T: Persistable>(_ type: T.Type) async throws -> [T] {
+        try await context.fdbContext.fetch(type).execute()
+    }
+
+    /// Runtime introspection for diagnosing polymorphic conformance.
+    /// Returns whether the given type is recognised by Swift as conforming to
+    /// `Polymorphable` at runtime, plus the polymorphic metadata resolved
+    /// through that conformance.
+    internal func _debugPolymorphicMetadata<T: Persistable>(
+        _ type: T.Type
+    ) -> (isPolymorphable: Bool, polyDirectory: String, typeDirectory: String, polymorphableType: String) {
+        let polyDir: String
+        let polyTypeName: String
+        if let polyType = type as? any Polymorphable.Type {
+            polyDir = polyType.polymorphicDirectoryPathComponents
+                .map { "\($0)" }
+                .joined(separator: "/")
+            polyTypeName = polyType.polymorphableType
+        } else {
+            polyDir = ""
+            polyTypeName = ""
+        }
+        let typeDir = type.directoryPathComponents
+            .map { "\($0)" }
+            .joined(separator: "/")
+        return (type is any Polymorphable.Type, polyDir, typeDir, polyTypeName)
+    }
+
+    /// Returns the set of polymorphic group identifiers registered in the
+    /// active Schema. Used by diagnostic tests to confirm that Schema
+    /// registration picked up the runtime Polymorphable conformance.
+    internal func _debugPolymorphicGroupIdentifiers() -> [String] {
+        container.schema.polymorphicGroups.map { $0.identifier }
+    }
+
+    /// Returns the schema metadata observed for a polymorphic group:
+    /// the resolved directory components, the member type names, and
+    /// the polymorphic index descriptor names.
+    internal func _debugPolymorphicGroupInfo(identifier: String) -> (components: [String], memberTypes: [String], indexes: [String])? {
+        guard let group = container.schema.polymorphicGroup(identifier: identifier) else {
+            return nil
+        }
+        let components: [String] = group.directoryComponents.map { component in
+            switch component {
+            case .staticPath(let value): return value
+            case .dynamicField(let name): return "$\(name)"
+            }
+        }
+        let indexes = group.indexes.map { $0.name }
+        return (components, group.memberTypeNames, indexes)
+    }
+
+    /// Directly insert a Persistable (bypassing `resolveAndInsertEntities`) and
+    /// commit. Used by diagnostic tests to isolate the dual-write code path
+    /// from entity-resolution logic.
+    internal func _debugDirectInsertAndCommit<T: Persistable & Sendable>(_ model: T) async throws {
+        context.fdbContext.insert(model)
+        try await context.fdbContext.save()
+    }
+
+    /// Count raw (key, value) entries directly under the polymorphic items
+    /// subspace of the given group identifier. Bypasses `fetchPolymorphic`
+    /// entirely so diagnostic tests can distinguish "write path didn't write
+    /// to the poly directory" from "read path is broken".
+    internal func _debugRawPolymorphicKeyCount(identifier: String) async throws -> Int {
+        let subspace = try await container.resolvePolymorphicDirectory(for: identifier)
+        let itemSubspace = subspace.subspace(SubspaceKey.items)
+        let (begin, end) = itemSubspace.range()
+        return try await context.fdbContext.executeCanonicalRead { transaction in
+            var count = 0
+            let pairs = try await transaction.collectRange(begin: begin, end: end)
+            count = pairs.count
+            return count
+        }
+    }
+
+    /// Probe the polymorphic items layout. Returns:
+    /// - `itemsPrefixHex`: hex-encoded prefix of the items subspace
+    /// - `allKeysHex`: all raw keys under the items subspace
+    /// - `typeCode`: DJB2 code for `T.persistableType`
+    /// - `typeSubspacePrefixHex`: hex-encoded prefix of
+    ///   `itemSubspace.subspace(typeCode)`
+    /// - `typeScopedKeysHex`: raw keys found under `typeSubspacePrefix` range
+    internal func _debugPolymorphicItemsProbe<T: Persistable & Polymorphable>(
+        _ type: T.Type
+    ) async throws -> (
+        itemsPrefixHex: String,
+        allKeysHex: [String],
+        typeCode: Int64,
+        typeSubspacePrefixHex: String,
+        typeScopedKeysHex: [String]
+    ) {
+        let subspace = try await container.resolvePolymorphicDirectory(for: T.polymorphableType)
+        let itemSubspace = subspace.subspace(SubspaceKey.items)
+        let typeCode = T.typeCode(for: T.persistableType)
+        let typeSubspace = itemSubspace.subspace(typeCode)
+
+        let (beginAll, endAll) = itemSubspace.range()
+        let (beginType, endType) = typeSubspace.range()
+
+        return try await context.fdbContext.executeCanonicalRead { transaction in
+            let allPairs = try await transaction.collectRange(begin: beginAll, end: endAll)
+            let all = allPairs.map { $0.0.map { String(format: "%02x", $0) }.joined() }
+            let typedPairs = try await transaction.collectRange(begin: beginType, end: endType)
+            let typed = typedPairs.map { $0.0.map { String(format: "%02x", $0) }.joined() }
+            return (
+                itemsPrefixHex: itemSubspace.prefix.map { String(format: "%02x", $0) }.joined(),
+                allKeysHex: all,
+                typeCode: typeCode,
+                typeSubspacePrefixHex: typeSubspace.prefix.map { String(format: "%02x", $0) }.joined(),
+                typeScopedKeysHex: typed
+            )
+        }
+    }
+
     // MARK: - Cosine Similarity
 
     private static func cosineSimilarity(_ a: [Float], _ b: [Float]) -> Float {

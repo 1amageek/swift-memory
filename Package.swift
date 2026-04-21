@@ -13,7 +13,7 @@ let package = Package(
         .package(url: "https://github.com/1amageek/database-kit.git", from: "26.0411.2"),
         .package(
             url: "https://github.com/1amageek/database-framework.git",
-            revision: "ddecf5a15167d3ccb2146369a795e2395edd4c08",
+            from: "26.0421.3",
             traits: ["SQLite"]
         ),
         .package(

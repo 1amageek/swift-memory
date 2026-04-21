@@ -1,12 +1,13 @@
 {
-  "originHash" : "da92dbc2e5b2ec4bc37f7dfebbdc61e6712dd3a221bd635e739cf77c69916bfa",
+  "originHash" : "1f3db1d234567278d778d09974751fda6fc21853518b943206127208d5a23340",
   "pins" : [
     {
       "identity" : "database-framework",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/database-framework.git",
       "state" : {
-        "revision" : "ddecf5a15167d3ccb2146369a795e2395edd4c08"
+        "revision" : "59ac03f30ff58e92cbc6ed27d2d0c65253b9fa37",
+        "version" : "26.421.3"
       }
     },
     {
@@ -41,8 +42,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/storage-kit.git",
       "state" : {
-        "branch" : "main",
-        "revision" : "cd04861c57182e207b8056e06d93c1b18deeeb5e"
+        "revision" : "93c87e0b4f10316a308cbd4ae6829499382dafc8",
+        "version" : "26.421.0"
       }
     },
     {
@@ -203,8 +204,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/swift-yaml.git",
       "state" : {
-        "branch" : "main",
-        "revision" : "8a33d36bca390d9518d5f7e483cbbaa011da5f76"
+        "revision" : "8a33d36bca390d9518d5f7e483cbbaa011da5f76",
+        "version" : "1.0.1"
       }
     }
   ],

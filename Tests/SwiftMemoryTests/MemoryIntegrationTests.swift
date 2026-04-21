@@ -1,7 +1,32 @@
 import Testing
 import Foundation
-import SwiftMemory
+@testable import SwiftMemory
 import MemoryOntology
+import Database
+
+// Test-only entity type used to exercise embedding-based deduplication.
+// `Entity` conformance is declared in the struct header so Swift emits the
+// Polymorphable conformance record on the concrete type's metadata.
+// Computed properties required by `Entity` are declared in an extension so
+// the @Persistable macro does not treat them as stored fields.
+@Persistable @OWLClass("ex:Person")
+struct TestPerson: Entity {
+
+    #Directory<TestPerson>("test", "persons")
+
+    var id: String = ULID().ulidString
+    var name: String
+    var contextText: String = ""
+    var embedding: [Float] = []
+    var created: Date = Date()
+    var updated: Date = Date()
+}
+
+extension TestPerson {
+    var label: String { name }
+    var entityType: String { "persons" }
+    var resolutionContext: String { contextText }
+}
 
 /// Deterministic stub used by tests that need a Memory with a provider.
 /// Returns a seeded embedding that depends only on the input text, so two
@@ -162,6 +187,187 @@ struct MemoryIntegrationTests {
         let result = try await memory.recall(keywords: ["Alice"])
         let iris = result.entities.map(\.iri)
         #expect(iris.contains("ex:person/alice"))
+    }
+
+    // MARK: - Entity Embedding Deduplication
+
+    @Test("Direct fdbContext.insert writes to polymorphic directory")
+    func directInsertDualWrite() async throws {
+        let memory = try await Memory(
+            path: nil,
+            entityTypes: [TestPerson.self],
+            embeddingProvider: StubEmbeddingProvider()
+        )
+
+        // First confirm Swift's runtime recognises TestPerson as Polymorphable
+        // and resolves distinct concrete vs polymorphic directories.
+        let metadata = await memory._debugPolymorphicMetadata(TestPerson.self)
+        #expect(metadata.isPolymorphable, "TestPerson must conform to Polymorphable at runtime")
+        #expect(metadata.polyDirectory != metadata.typeDirectory,
+                "poly and concrete directories must differ for dual-write to trigger; poly=\(metadata.polyDirectory) type=\(metadata.typeDirectory)")
+        #expect(metadata.polymorphableType == "Entity",
+                "polymorphableType must resolve to 'Entity'; got '\(metadata.polymorphableType)'")
+
+        let groups = await memory._debugPolymorphicGroupIdentifiers()
+        #expect(groups.contains("Entity"),
+                "Schema must register the 'Entity' polymorphic group; groups=\(groups)")
+
+        let groupInfo = await memory._debugPolymorphicGroupInfo(identifier: "Entity")
+        #expect(groupInfo?.memberTypes.contains("TestPerson") == true,
+                "Entity group must list TestPerson as a member; members=\(groupInfo?.memberTypes ?? [])")
+        #expect(groupInfo?.components == ["memory", "entities"],
+                "Entity group must resolve to [memory, entities]; components=\(groupInfo?.components ?? [])")
+        #expect(groupInfo?.indexes.contains("Entity_vector_embedding") == true,
+                "Entity group must include the vector embedding index; indexes=\(groupInfo?.indexes ?? [])")
+
+        // Bypass Memory's resolve pipeline — insert directly via fdbContext to
+        // isolate the dual-write code path from entity-resolution logic.
+        var alice = TestPerson(name: "Alice")
+        alice.embedding = [Float](repeating: 0, count: 256)
+        try await memory._debugDirectInsertAndCommit(alice)
+
+        let concrete = try await memory._debugFetchAll(TestPerson.self)
+        let rawPolyKeys = try await memory._debugRawPolymorphicKeyCount(identifier: "Entity")
+        let probe = try await memory._debugPolymorphicItemsProbe(TestPerson.self)
+        let polymorphic = try await memory._debugEntities(witness: TestPerson.self)
+        #expect(concrete.count == 1, "concrete fetch should see 1 record")
+        #expect(rawPolyKeys >= 1,
+                "raw scan under _polymorphic_Entity/R must see >=1 key; got \(rawPolyKeys)")
+        let probeMessage = "itemsPrefix=\(probe.itemsPrefixHex) typePrefix=\(probe.typeSubspacePrefixHex) typeCode=\(probe.typeCode) allKeys=\(probe.allKeysHex) typeKeys=\(probe.typeScopedKeysHex)"
+        #expect(probe.typeScopedKeysHex.count >= 1,
+                "typeCode-scoped scan must see >=1 key. \(probeMessage)")
+        #expect(polymorphic.count == 1,
+                "polymorphic fetch should see 1 record; raw=\(rawPolyKeys) concrete=\(concrete.count)")
+    }
+
+    @Test("Entity with identical resolution text is deduplicated")
+    func entityIdenticalIsDeduplicated() async throws {
+        let memory = try await Memory(
+            path: nil,
+            entityTypes: [TestPerson.self],
+            embeddingProvider: StubEmbeddingProvider()
+        )
+
+        var first = MemoryBatch()
+        first.entity(TestPerson(name: "Alice"))
+        try await memory.store(first)
+
+        let concreteAfterFirst = try await memory._debugFetchAll(TestPerson.self)
+        let polyAfterFirst = try await memory._debugEntityCount(witness: TestPerson.self)
+        #expect(concreteAfterFirst.count == 1)
+        #expect(polyAfterFirst == 1)
+
+        var second = MemoryBatch()
+        second.entity(TestPerson(name: "Alice"))
+        try await memory.store(second)
+
+        let concreteAfterSecond = try await memory._debugFetchAll(TestPerson.self)
+        let polyAfterSecond = try await memory._debugEntityCount(witness: TestPerson.self)
+        #expect(concreteAfterSecond.count == 1)
+        #expect(polyAfterSecond == 1)
+    }
+
+    @Test("Entity with different label is inserted as a new record")
+    func entityDifferentLabelIsNewRecord() async throws {
+        let memory = try await Memory(
+            path: nil,
+            entityTypes: [TestPerson.self],
+            embeddingProvider: StubEmbeddingProvider()
+        )
+
+        var first = MemoryBatch()
+        first.entity(TestPerson(name: "Alice"))
+        try await memory.store(first)
+
+        var second = MemoryBatch()
+        second.entity(TestPerson(name: "Bob"))
+        try await memory.store(second)
+
+        let count = try await memory._debugEntityCount(witness: TestPerson.self)
+        #expect(count == 2)
+    }
+
+    @Test("Duplicate entity refreshes updated and preserves created")
+    func entityDuplicateRefreshesUpdated() async throws {
+        let memory = try await Memory(
+            path: nil,
+            entityTypes: [TestPerson.self],
+            embeddingProvider: StubEmbeddingProvider()
+        )
+
+        var first = MemoryBatch()
+        first.entity(TestPerson(name: "Alice"))
+        try await memory.store(first)
+
+        let firstRecords = try await memory._debugEntities(witness: TestPerson.self)
+        let firstEntity = try #require(firstRecords.first as? TestPerson)
+        let originalCreated = firstEntity.created
+        let originalUpdated = firstEntity.updated
+
+        try await Task.sleep(for: .milliseconds(20))
+
+        var second = MemoryBatch()
+        second.entity(TestPerson(name: "Alice"))
+        try await memory.store(second)
+
+        let secondRecords = try await memory._debugEntities(witness: TestPerson.self)
+        #expect(secondRecords.count == 1)
+        let updated = try #require(secondRecords.first as? TestPerson)
+        #expect(updated.created == originalCreated)
+        #expect(updated.updated > originalUpdated)
+    }
+
+    @Test("Duplicate entity in the same batch collapses to a single record")
+    func entityDuplicateWithinBatchCollapses() async throws {
+        let memory = try await Memory(
+            path: nil,
+            entityTypes: [TestPerson.self],
+            embeddingProvider: StubEmbeddingProvider()
+        )
+
+        var batch = MemoryBatch()
+        batch.entity(TestPerson(name: "Alice"))
+        batch.entity(TestPerson(name: "Alice"))
+        try await memory.store(batch)
+
+        let count = try await memory._debugEntityCount(witness: TestPerson.self)
+        #expect(count == 1)
+    }
+
+    @Test("Statement subject is remapped to resolved entity ID")
+    func statementRemappedToResolvedEntity() async throws {
+        let memory = try await Memory(
+            path: nil,
+            entityTypes: [TestPerson.self],
+            embeddingProvider: StubEmbeddingProvider()
+        )
+
+        var initial = MemoryBatch()
+        initial.entity(TestPerson(name: "Alice"))
+        try await memory.store(initial)
+
+        let existing = try await memory._debugEntities(witness: TestPerson.self)
+        let persistedAlice = try #require(existing.first as? TestPerson)
+
+        // Store again with a statement referencing the incoming label.
+        // The resolver should map "Alice" to the persisted entity ID and
+        // rewrite the statement subject.
+        var followup = MemoryBatch()
+        followup.entity(TestPerson(name: "Alice"))
+        followup.triple("Alice", "rdfs:comment", "loves memory")
+        try await memory.store(followup)
+
+        let statements = try await memory._debugFetchAll(Statement.self)
+        let remapped = statements.first {
+            $0.predicate == "rdfs:comment" && $0.object == "loves memory"
+        }
+        #expect(remapped?.subject == persistedAlice.id)
+        #expect(remapped?.id == Statement.contentID(
+            graph: "memory:default",
+            subject: persistedAlice.id,
+            predicate: "rdfs:comment",
+            object: "loves memory"
+        ))
     }
 
     @Test("Statement contentID is deterministic")
