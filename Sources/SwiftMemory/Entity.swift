@@ -45,6 +45,14 @@ import Vector
 /// ```
 public protocol Entity: Polymorphable {
 
+    /// Embedding vector dimensionality for the shared Entity index.
+    ///
+    /// All conforming types registered in the same `Memory` instance MUST
+    /// agree on this value. A default of 256 is provided for convenience;
+    /// override only when substituting an `EmbeddingProvider` whose output
+    /// dimensionality differs.
+    static var embeddingDimensions: Int { get }
+
     /// Canonical label used for entity resolution.
     ///
     /// Typically the entity's primary name (e.g., person name, organization name).
