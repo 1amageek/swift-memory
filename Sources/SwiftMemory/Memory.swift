@@ -18,9 +18,8 @@ private let logger = Logger(subsystem: "com.memory", category: "Memory")
 /// - Memory persists them and enables recall via spreading activation
 ///
 /// Entities are deduplicated on store via embedding similarity. When a new
-/// entity's resolution embedding text matches an existing entity above the
-/// configured threshold, the incoming entity is discarded and only the
-/// existing entity's `updated` timestamp is refreshed. Relationship
+/// entity's assertion embedding matches an existing entity above the
+/// configured threshold, the incoming entity is discarded and the relationship
 /// statements are remapped to the resolved identifier.
 ///
 /// ```swift
@@ -137,7 +136,6 @@ public actor Memory {
             }
             resolutionMap = try await resolveAndInsertEntities(
                 batch.entities,
-                now: now,
                 provider: provider
             )
         }
@@ -202,29 +200,26 @@ public actor Memory {
 
     /// Resolve and insert each entity in the batch.
     ///
-    /// For every input entity, computes a query embedding from its resolution
-    /// text and searches the shared polymorphic vector index using the
-    /// `Entity.embedding` KeyPath.
-    /// If the best cosine similarity is at or above the threshold, the input
-    /// is treated as a duplicate: the existing record's `updated` timestamp
-    /// is refreshed and no new record is created. Otherwise the input is
-    /// inserted with its embedding and `created`/`updated` set to `now`.
+    /// For every input entity, computes a query embedding from its `assertion`
+    /// (a natural-language class assertion like "Alice is a person") and
+    /// searches the shared polymorphic vector index using the `Entity.embedding`
+    /// KeyPath. If the best cosine similarity is at or above the threshold,
+    /// the input is treated as a duplicate and no new record is created.
+    /// Otherwise the input is inserted with its embedding.
     ///
     /// Newly inserted entities are appended to the candidate list so that
     /// later entities in the same batch resolve against them (self-collision
     /// handling).
     ///
-    /// - Returns: Map from input entity label to the resolved entity ID.
+    /// - Returns: Map from input entity assertion to the resolved entity ID.
     private func resolveAndInsertEntities(
         _ entities: [any Persistable & Entity & Sendable],
-        now: Date,
         provider: any EmbeddingProvider
     ) async throws -> [String: String] {
         guard let first = entities.first else { return [:] }
         return try await _resolveAndInsertEntities(
             entities,
             witness: first,
-            now: now,
             provider: provider
         )
     }
@@ -232,7 +227,6 @@ public actor Memory {
     private func _resolveAndInsertEntities<E: Persistable & Entity & Sendable>(
         _ entities: [any Persistable & Entity & Sendable],
         witness: E,
-        now: Date,
         provider: any EmbeddingProvider
     ) async throws -> [String: String] {
         var pendingCandidates: [ResolutionCandidate] = []
@@ -242,7 +236,7 @@ public actor Memory {
         resolutionMap.reserveCapacity(entities.count)
 
         for entity in entities {
-            let queryVec = try await provider.embed(entity.resolutionEmbeddingText)
+            let queryVec = try await provider.embed(entity.assertion)
 
             let persistedMatch = try await bestPersistedCandidate(
                 witness: E.self,
@@ -258,30 +252,25 @@ public actor Memory {
             let bestMatch = strongerMatch(persistedMatch, pendingMatch)
 
             if let match = bestMatch {
-                var existing = match.candidate.persistable
-                existing.updated = now
-                context.fdbContext.insert(existing)
-                resolutionMap[entity.label] = match.candidate.id
+                resolutionMap[entity.assertion] = match.candidate.id
                 logger.info(
-                    "[resolve] match '\(entity.label)' -> '\(match.candidate.label)' sim=\(match.similarity)"
+                    "[resolve] match '\(Self.shortAssertion(entity.assertion))' -> '\(Self.shortAssertion(match.candidate.assertion))' sim=\(match.similarity)"
                 )
             } else {
                 var mutable = entity
                 mutable.embedding = queryVec
-                mutable.created = now
-                mutable.updated = now
                 context.fdbContext.insert(mutable)
 
                 let newID = String(describing: mutable.id)
-                resolutionMap[entity.label] = newID
+                resolutionMap[entity.assertion] = newID
 
                 pendingCandidates.append(ResolutionCandidate(
                     id: newID,
-                    label: mutable.label,
+                    assertion: mutable.assertion,
                     embedding: queryVec,
                     persistable: mutable
                 ))
-                logger.info("[resolve] new '\(entity.label)' id=\(newID)")
+                logger.info("[resolve] new '\(Self.shortAssertion(entity.assertion))' id=\(newID)")
             }
         }
 
@@ -290,7 +279,7 @@ public actor Memory {
 
     private struct ResolutionCandidate: Sendable {
         let id: String
-        let label: String
+        let assertion: String
         let embedding: [Float]
         let persistable: any Persistable & Entity & Sendable
     }
@@ -338,12 +327,18 @@ public actor Memory {
         return (
             ResolutionCandidate(
                 id: best.id,
-                label: entity.label,
+                assertion: entity.assertion,
                 embedding: entity.embedding,
                 persistable: entity
             ),
             best.similarity
         )
+    }
+
+    /// Truncate a long assertion for log output.
+    private static func shortAssertion(_ assertion: String, limit: Int = 64) -> String {
+        if assertion.count <= limit { return assertion }
+        return String(assertion.prefix(limit)) + "…"
     }
 
     private func bestCandidate(
@@ -386,16 +381,16 @@ public actor Memory {
 
     /// Resolve entity candidates against existing knowledge without inserting.
     ///
-    /// For each candidate, embeds its text ("{type} {label} {context}"),
-    /// searches the shared Entity polymorphic vector index, and returns the
-    /// best match at or above the similarity threshold.
+    /// For each candidate, embeds its `assertion` (natural-language class
+    /// assertion), searches the shared Entity polymorphic vector index, and
+    /// returns the best match at or above the similarity threshold.
     ///
     /// This API is for callers that want to inspect resolution results before
     /// deciding what to store. Regular `store()` calls perform the same logic
     /// internally.
     ///
     /// - Parameters:
-    ///   - candidates: Entity candidates with type, label, and optional context.
+    ///   - candidates: Entity candidates, each with a natural-language assertion.
     ///   - witness: Any concrete Entity type (used to satisfy Swift generics;
     ///     the polymorphic fetch returns ALL Entity types regardless).
     ///   - threshold: Minimum similarity score to consider a match.
@@ -411,7 +406,7 @@ public actor Memory {
         guard let provider = context.embeddingProvider else {
             logger.info("[resolve] no embedding provider — returning all unresolved")
             return candidates.map {
-                ResolvedEntity(inputLabel: $0.label, inputType: $0.type)
+                ResolvedEntity(inputAssertion: $0.assertion)
             }
         }
 
@@ -421,7 +416,7 @@ public actor Memory {
         results.reserveCapacity(candidates.count)
 
         for candidate in candidates {
-            let queryEmbedding = try await provider.embed(candidate.embeddingText)
+            let queryEmbedding = try await provider.embed(candidate.assertion)
             let match = try await bestPersistedCandidate(
                 witness: T.self,
                 embedding: queryEmbedding,
@@ -431,17 +426,13 @@ public actor Memory {
 
             if let match {
                 results.append(ResolvedEntity(
-                    inputLabel: candidate.label,
-                    inputType: candidate.type,
+                    inputAssertion: candidate.assertion,
                     matchedID: match.candidate.id,
-                    matchedLabel: match.candidate.label,
+                    matchedAssertion: match.candidate.assertion,
                     similarity: match.similarity
                 ))
             } else {
-                results.append(ResolvedEntity(
-                    inputLabel: candidate.label,
-                    inputType: candidate.type
-                ))
+                results.append(ResolvedEntity(inputAssertion: candidate.assertion))
             }
         }
 

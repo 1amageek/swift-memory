@@ -5,9 +5,9 @@ import NaturalLanguage
 import MemoryOntology
 import Database
 
-// Test entity for AppleEmbeddingProvider. Overrides `embeddingDimensions`
-// to match the English NLContextualEmbedding model output so that the
-// shared Entity polymorphic vector index is consistent.
+// Test entity for AppleEmbeddingProvider. Uses the default 512-dim
+// `embeddingDimensions` which matches the English NLContextualEmbedding
+// model output.
 @Persistable @OWLClass("ex:Person")
 struct AppleTestPerson: Entity {
 
@@ -15,15 +15,8 @@ struct AppleTestPerson: Entity {
 
     var id: String = ULID().ulidString
     var name: String
+    var assertion: String = ""
     var embedding: [Float] = []
-    var created: Date = Date()
-    var updated: Date = Date()
-}
-
-extension AppleTestPerson {
-    static var embeddingDimensions: Int { 512 }
-    var label: String { name }
-    var entityType: String { "persons" }
 }
 
 @Suite("Apple Embedding Integration Tests", .serialized)
@@ -43,7 +36,7 @@ struct AppleEmbeddingIntegrationTests {
     @Test("AppleEmbeddingProvider embeds text to normalized vector")
     func embedsToNormalizedVector() async throws {
         let provider = try await makeProvider()
-        let vector = try await provider.embed("persons Alice")
+        let vector = try await provider.embed("Alice is a person")
         #expect(vector.count == provider.dimensions)
 
         let norm = vector.reduce(Float(0)) { $0 + $1 * $1 }.squareRoot()
@@ -61,11 +54,11 @@ struct AppleEmbeddingIntegrationTests {
         )
 
         var first = MemoryBatch()
-        first.entity(AppleTestPerson(name: "Alice"))
+        first.entity(AppleTestPerson(name: "Alice", assertion: "Alice is a person"))
         try await memory.store(first)
 
         var second = MemoryBatch()
-        second.entity(AppleTestPerson(name: "Alice"))
+        second.entity(AppleTestPerson(name: "Alice", assertion: "Alice is a person"))
         try await memory.store(second)
 
         let count = try await memory._debugEntityCount(witness: AppleTestPerson.self)
@@ -83,11 +76,11 @@ struct AppleEmbeddingIntegrationTests {
         )
 
         var first = MemoryBatch()
-        first.entity(AppleTestPerson(name: "Alice"))
+        first.entity(AppleTestPerson(name: "Alice", assertion: "Alice is a person"))
         try await memory.store(first)
 
         var second = MemoryBatch()
-        second.entity(AppleTestPerson(name: "Bob"))
+        second.entity(AppleTestPerson(name: "Bob", assertion: "Bob is a person"))
         try await memory.store(second)
 
         let count = try await memory._debugEntityCount(witness: AppleTestPerson.self)

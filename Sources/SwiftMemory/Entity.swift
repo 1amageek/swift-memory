@@ -22,97 +22,45 @@ import Vector
 /// The shared VectorIndex `Entity_vector_embedding` spans all conforming types.
 /// Changing dimensions or metric requires rebuilding the entire polymorphic index.
 ///
+/// **Class Assertion Embedding**:
+/// The `assertion` field is a natural-language class assertion identifying the entity
+/// (e.g., "Acme Inc is a company that provides cloud infrastructure services").
+/// The embedding of `assertion` carries the entity's semantic identity and is what
+/// drives cross-type resolution.
+///
 /// **Storage Layout**:
 /// ```
 /// [memory/entities]/R/[typeCode]/[id]                                   -> protobuf
 /// [memory/entities]/I/Entity_vector_embedding/[vector]/[typeCode]/[id]  -> empty
-/// ```
-///
-/// **Dual-Write Behavior**:
-/// Each conforming type writes to both its own directory
-/// (e.g., "bob/persons") and the shared polymorphic directory ("memory/entities").
-///
-/// **Usage**:
-/// ```swift
-/// @Persistable @OWLClass("ex:Person")
-/// struct Person: Entity {
-///     #Directory<Person>("bob", "persons")
-///     var id: String = ULID().ulidString
-///     var name: String
-///     var embedding: [Float] = []
-///     var label: String { name }
-/// }
 /// ```
 public protocol Entity: Polymorphable {
 
     /// Embedding vector dimensionality for the shared Entity index.
     ///
     /// All conforming types registered in the same `Memory` instance MUST
-    /// agree on this value. A default of 256 is provided for convenience;
-    /// override only when substituting an `EmbeddingProvider` whose output
-    /// dimensionality differs.
+    /// agree on this value. A default of 512 is provided (AppleEmbeddingProvider
+    /// native dim); override only when substituting an `EmbeddingProvider` whose
+    /// output dimensionality differs.
     static var embeddingDimensions: Int { get }
 
-    /// Canonical label used for entity resolution.
+    /// Natural-language class assertion identifying this entity.
     ///
-    /// Typically the entity's primary name (e.g., person name, organization name).
-    /// Used to construct the embedding text and as the resolved label.
-    var label: String { get }
+    /// Example: `"Google is a company"`, `"Alice is a person who works at Anthropic"`.
+    /// This text is what gets embedded; the embedding carries the entity's semantic
+    /// identity for cross-type resolution.
+    var assertion: String { get set }
 
-    /// Entity class key (e.g., "organizations", "persons").
+    /// Embedding vector of `assertion`.
     ///
-    /// Used as the first token of the embedding text and for class-level
-    /// pre-filtering during resolution.
-    var entityType: String { get }
-
-    /// Additional discriminating context appended to the embedding text.
-    ///
-    /// Override to include properties that help distinguish entities with
-    /// similar names (domain, email, role, etc.). Default is empty.
-    var resolutionContext: String { get }
-
-    /// Embedding vector for similarity-based entity resolution.
-    ///
-    /// Generated from `resolutionEmbeddingText`. Populated by `Memory.store()`
-    /// on first insert.
+    /// Populated by `Memory.store()` on first insert.
     var embedding: [Float] { get set }
-
-    /// Creation timestamp. Set on first insert.
-    var created: Date { get set }
-
-    /// Last update timestamp. Refreshed when a resolution match is detected.
-    var updated: Date { get set }
 }
 
 // MARK: - Shared Constants
 
 extension Entity {
-    /// Embedding vector dimensions for the shared Entity index.
-    ///
-    /// This is the single source of truth for Entity embedding dimensions.
-    /// All conforming types must produce embeddings of this size.
-    /// Mismatch causes index corruption.
-    public static var embeddingDimensions: Int { 256 }
-}
-
-// MARK: - Defaults
-
-extension Entity {
-
-    /// Default: no additional context.
-    public var resolutionContext: String { "" }
-
-    /// Text used to compute the entity's embedding vector.
-    ///
-    /// Format: `"{entityType} {label}"` or `"{entityType} {label} {context}"`
-    /// depending on whether `resolutionContext` is empty.
-    public var resolutionEmbeddingText: String {
-        let trimmedContext = resolutionContext.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmedContext.isEmpty {
-            return "\(entityType) \(label)"
-        }
-        return "\(entityType) \(label) \(trimmedContext)"
-    }
+    /// Default embedding dimensions: 512 (AppleEmbeddingProvider native).
+    public static var embeddingDimensions: Int { 512 }
 }
 
 // MARK: - Polymorphable Conformance
