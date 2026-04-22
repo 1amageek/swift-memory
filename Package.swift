@@ -10,10 +10,10 @@ let package = Package(
         .library(name: "SwiftMemory", targets: ["SwiftMemory"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/1amageek/database-kit.git", from: "26.0418.0"),
+        .package(url: "https://github.com/1amageek/database-kit.git", from: "26.0422.0"),
         .package(
             url: "https://github.com/1amageek/database-framework.git",
-            from: "26.0421.3",
+            from: "26.0422.0",
             traits: ["SQLite"]
         ),
         .package(
