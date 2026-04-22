@@ -45,6 +45,8 @@ public actor Memory {
     /// entity as a duplicate of an existing one.
     public static let defaultResolutionThreshold: Float = 0.85
 
+    private static let resolutionSearchLimit = 10
+
     private let context: MemoryContext
     private let container: DBContainer
     private let recallEngine: RecallEngine
@@ -201,7 +203,8 @@ public actor Memory {
     /// Resolve and insert each entity in the batch.
     ///
     /// For every input entity, computes a query embedding from its resolution
-    /// text and compares against existing entities (fetched once upfront).
+    /// text and searches the shared polymorphic vector index using the
+    /// `Entity.embedding` KeyPath.
     /// If the best cosine similarity is at or above the threshold, the input
     /// is treated as a duplicate: the existing record's `updated` timestamp
     /// is refreshed and no new record is created. Otherwise the input is
@@ -232,19 +235,8 @@ public actor Memory {
         now: Date,
         provider: any EmbeddingProvider
     ) async throws -> [String: String] {
-        let existingItems = try await context.fdbContext.fetchPolymorphic(E.self)
-
-        var candidates: [ResolutionCandidate] = []
-        candidates.reserveCapacity(existingItems.count)
-        for item in existingItems {
-            guard let ent = item as? any Persistable & Entity & Sendable else { continue }
-            candidates.append(ResolutionCandidate(
-                id: String(describing: item.id),
-                label: ent.label,
-                embedding: ent.embedding,
-                persistable: ent
-            ))
-        }
+        var pendingCandidates: [ResolutionCandidate] = []
+        pendingCandidates.reserveCapacity(entities.count)
 
         var resolutionMap: [String: String] = [:]
         resolutionMap.reserveCapacity(entities.count)
@@ -252,25 +244,26 @@ public actor Memory {
         for entity in entities {
             let queryVec = try await provider.embed(entity.resolutionEmbeddingText)
 
-            var bestIndex: Int?
-            var bestSimilarity: Float = 0
-            for i in 0..<candidates.count {
-                let candEmbedding = candidates[i].embedding
-                guard candEmbedding.count == queryVec.count else { continue }
-                let sim = Self.cosineSimilarity(queryVec, candEmbedding)
-                if sim >= resolutionThreshold && sim > bestSimilarity {
-                    bestSimilarity = sim
-                    bestIndex = i
-                }
-            }
+            let persistedMatch = try await bestPersistedCandidate(
+                witness: E.self,
+                embedding: queryVec,
+                threshold: resolutionThreshold,
+                limit: Self.resolutionSearchLimit
+            )
+            let pendingMatch = bestCandidate(
+                in: pendingCandidates,
+                embedding: queryVec,
+                threshold: resolutionThreshold
+            )
+            let bestMatch = strongerMatch(persistedMatch, pendingMatch)
 
-            if let idx = bestIndex {
-                var existing = candidates[idx].persistable
+            if let match = bestMatch {
+                var existing = match.candidate.persistable
                 existing.updated = now
                 context.fdbContext.insert(existing)
-                resolutionMap[entity.label] = candidates[idx].id
+                resolutionMap[entity.label] = match.candidate.id
                 logger.info(
-                    "[resolve] match '\(entity.label)' -> '\(candidates[idx].label)' sim=\(bestSimilarity)"
+                    "[resolve] match '\(entity.label)' -> '\(match.candidate.label)' sim=\(match.similarity)"
                 )
             } else {
                 var mutable = entity
@@ -282,7 +275,7 @@ public actor Memory {
                 let newID = String(describing: mutable.id)
                 resolutionMap[entity.label] = newID
 
-                candidates.append(ResolutionCandidate(
+                pendingCandidates.append(ResolutionCandidate(
                     id: newID,
                     label: mutable.label,
                     embedding: queryVec,
@@ -302,6 +295,81 @@ public actor Memory {
         let persistable: any Persistable & Entity & Sendable
     }
 
+    private typealias ResolutionMatch = (candidate: ResolutionCandidate, similarity: Float)
+
+    private func bestPersistedCandidate<E: Persistable & Entity & Sendable>(
+        witness: E.Type,
+        embedding: [Float],
+        threshold: Float,
+        limit: Int
+    ) async throws -> ResolutionMatch? {
+        let page = try await context.fdbContext.findPolymorphic(E.self)
+            .vector(\.embedding, dimensions: E.embeddingDimensions)
+            .query(embedding, k: limit)
+            .metric(.cosine)
+            .executePage()
+
+        var best: (id: String, similarity: Float)?
+        for result in page.results {
+            guard result.item is any Persistable & Entity & Sendable else {
+                continue
+            }
+            guard let distance = result.annotations["distance"]?.doubleValue else {
+                throw MemoryError.invalidQuery("polymorphic vector result is missing distance annotation")
+            }
+
+            let similarity = 1 - Float(distance)
+            guard similarity >= threshold else { continue }
+
+            let id = String(describing: result.item.id)
+            if best == nil || similarity > best!.similarity {
+                best = (id: id, similarity: similarity)
+            }
+        }
+
+        guard let best else {
+            return nil
+        }
+        guard let item = try await context.fdbContext.fetchPolymorphic(E.self, id: best.id),
+              let entity = item as? any Persistable & Entity & Sendable else {
+            return nil
+        }
+
+        return (
+            ResolutionCandidate(
+                id: best.id,
+                label: entity.label,
+                embedding: entity.embedding,
+                persistable: entity
+            ),
+            best.similarity
+        )
+    }
+
+    private func bestCandidate(
+        in candidates: [ResolutionCandidate],
+        embedding: [Float],
+        threshold: Float
+    ) -> ResolutionMatch? {
+        var best: ResolutionMatch?
+        for candidate in candidates {
+            guard candidate.embedding.count == embedding.count else { continue }
+            let similarity = Self.cosineSimilarity(embedding, candidate.embedding)
+            guard similarity >= threshold else { continue }
+            best = strongerMatch(best, (candidate, similarity))
+        }
+        return best
+    }
+
+    private func strongerMatch(
+        _ lhs: ResolutionMatch?,
+        _ rhs: ResolutionMatch?
+    ) -> ResolutionMatch? {
+        guard let lhs else { return rhs }
+        guard let rhs else { return lhs }
+        return lhs.similarity >= rhs.similarity ? lhs : rhs
+    }
+
     // MARK: - Recall
 
     /// Recall from keywords — spreading activation.
@@ -319,8 +387,8 @@ public actor Memory {
     /// Resolve entity candidates against existing knowledge without inserting.
     ///
     /// For each candidate, embeds its text ("{type} {label} {context}"),
-    /// fetches all existing entities from the shared Entity polymorphic group,
-    /// and returns the best match at or above the similarity threshold.
+    /// searches the shared Entity polymorphic vector index, and returns the
+    /// best match at or above the similarity threshold.
     ///
     /// This API is for callers that want to inspect resolution results before
     /// deciding what to store. Regular `store()` calls perform the same logic
@@ -349,45 +417,25 @@ public actor Memory {
 
         guard !candidates.isEmpty else { return [] }
 
-        let existingItems = try await context.fdbContext.fetchPolymorphic(T.self)
-
-        var entityIDs: [String] = []
-        var entityLabels: [String] = []
-        var entityEmbeddings: [[Float]] = []
-
-        for item in existingItems {
-            guard let entity = item as? any Entity else { continue }
-            entityIDs.append(String(describing: item.id))
-            entityLabels.append(entity.label)
-            entityEmbeddings.append(entity.embedding)
-        }
-
         var results: [ResolvedEntity] = []
         results.reserveCapacity(candidates.count)
 
         for candidate in candidates {
             let queryEmbedding = try await provider.embed(candidate.embeddingText)
+            let match = try await bestPersistedCandidate(
+                witness: T.self,
+                embedding: queryEmbedding,
+                threshold: effectiveThreshold,
+                limit: Self.resolutionSearchLimit
+            )
 
-            var bestIndex: Int?
-            var bestSimilarity: Float = 0
-
-            for i in 0..<entityIDs.count {
-                let emb = entityEmbeddings[i]
-                guard !emb.isEmpty, emb.count == queryEmbedding.count else { continue }
-                let sim = Self.cosineSimilarity(queryEmbedding, emb)
-                if sim >= effectiveThreshold && sim > bestSimilarity {
-                    bestIndex = i
-                    bestSimilarity = sim
-                }
-            }
-
-            if let idx = bestIndex {
+            if let match {
                 results.append(ResolvedEntity(
                     inputLabel: candidate.label,
                     inputType: candidate.type,
-                    matchedID: entityIDs[idx],
-                    matchedLabel: entityLabels[idx],
-                    similarity: bestSimilarity
+                    matchedID: match.candidate.id,
+                    matchedLabel: match.candidate.label,
+                    similarity: match.similarity
                 ))
             } else {
                 results.append(ResolvedEntity(

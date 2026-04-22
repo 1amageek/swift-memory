@@ -28,6 +28,25 @@ extension TestPerson {
     var resolutionContext: String { contextText }
 }
 
+@Persistable @OWLClass("ex:Organization")
+struct TestOrganization: Entity {
+
+    #Directory<TestOrganization>("test", "organizations")
+
+    var id: String = ULID().ulidString
+    var name: String
+    var domain: String = ""
+    var embedding: [Float] = []
+    var created: Date = Date()
+    var updated: Date = Date()
+}
+
+extension TestOrganization {
+    var label: String { name }
+    var entityType: String { "organizations" }
+    var resolutionContext: String { domain }
+}
+
 /// Deterministic stub used by tests that need a Memory with a provider.
 /// Returns a seeded embedding that depends only on the input text, so two
 /// different strings produce different vectors and identical strings produce
@@ -190,6 +209,63 @@ struct MemoryIntegrationTests {
     }
 
     // MARK: - Entity Embedding Deduplication
+
+    @Test("Entity vector descriptors remain concrete KeyPaths per member type")
+    func entityVectorDescriptorsRemainConcreteKeyPaths() throws {
+        let schema = Schema(
+            [TestPerson.self, TestOrganization.self],
+            version: Schema.Version(1, 0, 0)
+        )
+
+        let personDescriptor = try #require(
+            schema.polymorphicIndexDescriptors(
+                identifier: "Entity",
+                memberType: TestPerson.self
+            ).first { $0.name == "Entity_vector_embedding" }
+        )
+        let organizationDescriptor = try #require(
+            schema.polymorphicIndexDescriptors(
+                identifier: "Entity",
+                memberType: TestOrganization.self
+            ).first { $0.name == "Entity_vector_embedding" }
+        )
+
+        #expect(personDescriptor.fieldNames == ["embedding"])
+        #expect(organizationDescriptor.fieldNames == ["embedding"])
+        #expect(personDescriptor.kind is VectorIndexKind<TestPerson>)
+        #expect(organizationDescriptor.kind is VectorIndexKind<TestOrganization>)
+        #expect(personDescriptor.keyPaths.first is PartialKeyPath<TestPerson>)
+        #expect(organizationDescriptor.keyPaths.first is PartialKeyPath<TestOrganization>)
+        #expect((personDescriptor.keyPaths.first is PartialKeyPath<TestOrganization>) == false)
+        #expect((organizationDescriptor.keyPaths.first is PartialKeyPath<TestPerson>) == false)
+    }
+
+    @Test("Entity vector index stores and resolves multiple concrete types")
+    func entityVectorIndexStoresAndResolvesMultipleConcreteTypes() async throws {
+        let memory = try await Memory(
+            path: nil,
+            entityTypes: [TestPerson.self, TestOrganization.self],
+            embeddingProvider: StubEmbeddingProvider()
+        )
+
+        var batch = MemoryBatch()
+        batch.entity(TestPerson(name: "Alice"))
+        batch.entity(TestOrganization(name: "Acme", domain: "acme.example"))
+        try await memory.store(batch)
+
+        let entities = try await memory._debugEntities(witness: TestPerson.self)
+        #expect(entities.count == 2)
+        #expect(entities.contains { $0 is TestPerson })
+        #expect(entities.contains { $0 is TestOrganization })
+
+        let resolved = try await memory.resolve(
+            [ResolveCandidate(type: "organizations", label: "Acme", context: "acme.example")],
+            witness: TestPerson.self
+        )
+        let first = try #require(resolved.first)
+        #expect(first.isResolved)
+        #expect(first.matchedLabel == "Acme")
+    }
 
     @Test("Direct fdbContext.insert writes to polymorphic directory")
     func directInsertDualWrite() async throws {
