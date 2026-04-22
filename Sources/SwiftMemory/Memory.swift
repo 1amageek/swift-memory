@@ -42,7 +42,12 @@ public actor Memory {
 
     /// Default cosine-similarity threshold used by `store()` to treat a new
     /// entity as a duplicate of an existing one.
-    public static let defaultResolutionThreshold: Float = 0.85
+    ///
+    /// Chosen to sit between the observed intra-class false-positive ceiling
+    /// (~0.94 for mean-pooled `NLContextualEmbedding` assertions that share
+    /// surface vocabulary but denote different entities) and the same-entity
+    /// true-positive floor (~0.98 for identical/near-identical assertions).
+    public static let defaultResolutionThreshold: Float = 0.95
 
     private static let resolutionSearchLimit = 10
 
@@ -237,15 +242,18 @@ public actor Memory {
 
         for entity in entities {
             let queryVec = try await provider.embed(entity.assertion)
+            let entityTypeID = ObjectIdentifier(type(of: entity))
 
             let persistedMatch = try await bestPersistedCandidate(
                 witness: E.self,
+                typeID: entityTypeID,
                 embedding: queryVec,
                 threshold: resolutionThreshold,
                 limit: Self.resolutionSearchLimit
             )
             let pendingMatch = bestCandidate(
                 in: pendingCandidates,
+                typeID: entityTypeID,
                 embedding: queryVec,
                 threshold: resolutionThreshold
             )
@@ -268,6 +276,7 @@ public actor Memory {
                     id: newID,
                     assertion: mutable.assertion,
                     embedding: queryVec,
+                    typeID: entityTypeID,
                     persistable: mutable
                 ))
                 logger.info("[resolve] new '\(Self.shortAssertion(entity.assertion))' id=\(newID)")
@@ -281,13 +290,25 @@ public actor Memory {
         let id: String
         let assertion: String
         let embedding: [Float]
+        let typeID: ObjectIdentifier
         let persistable: any Persistable & Entity & Sendable
     }
 
     private typealias ResolutionMatch = (candidate: ResolutionCandidate, similarity: Float)
 
+    /// Search the shared `Entity` polymorphic vector index and return the best
+    /// match whose **concrete Swift type** matches `typeID`.
+    ///
+    /// The polymorphic index intentionally spans every `Entity` subclass to
+    /// support cross-type recall (spreading activation). For resolve/dedup,
+    /// however, a candidate must only collide with persisted entities of the
+    /// same concrete type — otherwise mean-pooled assertion embeddings cause
+    /// cross-class contamination (e.g. an `Organization` candidate resolving
+    /// to a persisted `Service` simply because they share surface vocabulary).
+    /// This method performs the post-filter.
     private func bestPersistedCandidate<E: Persistable & Entity & Sendable>(
         witness: E.Type,
+        typeID: ObjectIdentifier,
         embedding: [Float],
         threshold: Float,
         limit: Int
@@ -301,6 +322,9 @@ public actor Memory {
         var best: (id: String, similarity: Float)?
         for result in page.results {
             guard result.item is any Persistable & Entity & Sendable else {
+                continue
+            }
+            guard ObjectIdentifier(type(of: result.item)) == typeID else {
                 continue
             }
             guard let distance = result.annotations["distance"]?.doubleValue else {
@@ -329,6 +353,7 @@ public actor Memory {
                 id: best.id,
                 assertion: entity.assertion,
                 embedding: entity.embedding,
+                typeID: ObjectIdentifier(type(of: item)),
                 persistable: entity
             ),
             best.similarity
@@ -341,13 +366,19 @@ public actor Memory {
         return String(assertion.prefix(limit)) + "…"
     }
 
+    /// Find the best intra-batch pending match whose concrete Swift type
+    /// matches `typeID`. Mirrors the type-filter applied to persisted
+    /// candidates so that a batch containing mixed Entity subtypes never
+    /// collapses a fresh `Person` into a freshly inserted `Organization`.
     private func bestCandidate(
         in candidates: [ResolutionCandidate],
+        typeID: ObjectIdentifier,
         embedding: [Float],
         threshold: Float
     ) -> ResolutionMatch? {
         var best: ResolutionMatch?
         for candidate in candidates {
+            guard candidate.typeID == typeID else { continue }
             guard candidate.embedding.count == embedding.count else { continue }
             let similarity = Self.cosineSimilarity(embedding, candidate.embedding)
             guard similarity >= threshold else { continue }
@@ -385,14 +416,22 @@ public actor Memory {
     /// assertion), searches the shared Entity polymorphic vector index, and
     /// returns the best match at or above the similarity threshold.
     ///
+    /// Matches are filtered to the concrete Swift type `T`: a candidate will
+    /// only resolve to persisted entities whose runtime type is `T`. The
+    /// polymorphic index still spans every `Entity` subclass (so that recall
+    /// / spreading activation can cross types), but resolve/dedup must not
+    /// — otherwise mean-pooled assertion embeddings cause cross-class
+    /// collisions via shared surface vocabulary.
+    ///
     /// This API is for callers that want to inspect resolution results before
     /// deciding what to store. Regular `store()` calls perform the same logic
-    /// internally.
+    /// internally, with the type filter applied per-entity using the entity's
+    /// runtime type.
     ///
     /// - Parameters:
     ///   - candidates: Entity candidates, each with a natural-language assertion.
-    ///   - witness: Any concrete Entity type (used to satisfy Swift generics;
-    ///     the polymorphic fetch returns ALL Entity types regardless).
+    ///   - witness: Concrete Entity type. Candidates are matched only against
+    ///     persisted entities of this exact type.
     ///   - threshold: Minimum similarity score to consider a match.
     ///     Defaults to the store-side threshold.
     /// - Returns: Resolution results for each candidate.
@@ -412,6 +451,8 @@ public actor Memory {
 
         guard !candidates.isEmpty else { return [] }
 
+        let witnessTypeID = ObjectIdentifier(T.self)
+
         var results: [ResolvedEntity] = []
         results.reserveCapacity(candidates.count)
 
@@ -419,6 +460,7 @@ public actor Memory {
             let queryEmbedding = try await provider.embed(candidate.assertion)
             let match = try await bestPersistedCandidate(
                 witness: T.self,
+                typeID: witnessTypeID,
                 embedding: queryEmbedding,
                 threshold: effectiveThreshold,
                 limit: Self.resolutionSearchLimit
