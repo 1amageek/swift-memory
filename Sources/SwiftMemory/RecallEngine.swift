@@ -68,8 +68,7 @@ public struct RecallEngine: Sendable {
         // Step 1: Name recall — find seed entities by label substring match
         var seedIRIs: Set<String> = []
         for cue in cues {
-            let result = try await context.fdbContext.sparql(Statement.self)
-                .defaultIndex()
+            let result = try await context.fdbContext.sparql(graph: "memory:default")
                 .where("?entity", "rdfs:label", "?label")
                 .filter("?label", contains: cue)
                 .select(["?entity"])
@@ -130,8 +129,7 @@ public struct RecallEngine: Sendable {
         guard hop <= maxHops else { return }
 
         // Outgoing: iri → ?rel → ?target
-        let outgoing = try await context.fdbContext.sparql(Statement.self)
-            .defaultIndex()
+        let outgoing = try await context.fdbContext.sparql(graph: "memory:default")
             .where(iri, "?rel", "?target")
             .select(["?target", "?rel"])
             .execute()
@@ -159,8 +157,7 @@ public struct RecallEngine: Sendable {
         }
 
         // Incoming: ?source → ?rel → iri
-        let incoming = try await context.fdbContext.sparql(Statement.self)
-            .defaultIndex()
+        let incoming = try await context.fdbContext.sparql(graph: "memory:default")
             .where("?source", "?rel", iri)
             .select(["?source", "?rel"])
             .execute()
@@ -202,8 +199,7 @@ public struct RecallEngine: Sendable {
     // MARK: - Resolution
 
     private func resolveLabel(for iri: String) async throws -> String {
-        let result = try await context.fdbContext.sparql(Statement.self)
-            .defaultIndex()
+        let result = try await context.fdbContext.sparql(graph: "memory:default")
             .where(iri, "rdfs:label", "?label")
             .select(["?label"])
             .execute()
@@ -212,8 +208,7 @@ public struct RecallEngine: Sendable {
     }
 
     private func resolveType(for iri: String) async throws -> String {
-        let result = try await context.fdbContext.sparql(Statement.self)
-            .defaultIndex()
+        let result = try await context.fdbContext.sparql(graph: "memory:default")
             .where(iri, "rdf:type", "?type")
             .select(["?type"])
             .execute()
