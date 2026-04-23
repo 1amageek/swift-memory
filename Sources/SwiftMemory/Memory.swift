@@ -49,7 +49,19 @@ public actor Memory {
     /// true-positive floor (~0.98 for identical/near-identical assertions).
     public static let defaultResolutionThreshold: Float = 0.95
 
-    private static let resolutionSearchLimit = 10
+    /// Default cosine-similarity threshold used by `resolve()` to surface
+    /// possible matches to the caller (typically an LLM).
+    ///
+    /// Much looser than `defaultResolutionThreshold` because the resolve API
+    /// returns top-K candidates for external judgment. The threshold only
+    /// filters out vectors that are almost certainly unrelated; the final
+    /// match decision is made by the LLM examining assertions side by side.
+    public static let defaultResolveThreshold: Float = 0.70
+
+    /// Default maximum number of candidates returned per input by `resolve()`.
+    public static let defaultResolveLimit: Int = 10
+
+    private static let resolutionSearchLimit = 200
 
     private let context: MemoryContext
     private let container: DBContainer
@@ -320,6 +332,7 @@ public actor Memory {
             .executePage()
 
         var best: (id: String, similarity: Float)?
+        var topSameType: (id: String, similarity: Float, assertion: String)?
         for result in page.results {
             guard result.item is any Persistable & Entity & Sendable else {
                 continue
@@ -332,15 +345,26 @@ public actor Memory {
             }
 
             let similarity = 1 - Float(distance)
+            let id = String(describing: result.item.id)
+
+            if topSameType == nil || similarity > topSameType!.similarity {
+                let assertion = (result.item as? any Entity)?.assertion ?? ""
+                topSameType = (id: id, similarity: similarity, assertion: assertion)
+            }
+
             guard similarity >= threshold else { continue }
 
-            let id = String(describing: result.item.id)
             if best == nil || similarity > best!.similarity {
                 best = (id: id, similarity: similarity)
             }
         }
 
         guard let best else {
+            if let top = topSameType {
+                logger.info("[resolve] miss top=\(top.similarity) threshold=\(threshold) candidate='\(Self.shortAssertion(top.assertion))'")
+            } else {
+                logger.info("[resolve] miss no same-type candidate threshold=\(threshold)")
+            }
             return nil
         }
         guard let item = try await context.fdbContext.fetchPolymorphic(E.self, id: best.id),
@@ -358,6 +382,53 @@ public actor Memory {
             ),
             best.similarity
         )
+    }
+
+    /// Return up to `k` persisted `E` entities (runtime type == `typeID`)
+    /// whose cosine similarity to `embedding` clears `threshold`, sorted by
+    /// similarity descending.
+    ///
+    /// Used by the public `resolve` API to surface possible matches for
+    /// external (LLM) judgment. The internal store-time dedup path uses
+    /// the stricter `bestPersistedCandidate` instead — a threshold gap
+    /// between "worth showing" and "auto-dedupe" is intentional.
+    private func topPersistedCandidates<E: Persistable & Entity & Sendable>(
+        witness: E.Type,
+        typeID: ObjectIdentifier,
+        embedding: [Float],
+        threshold: Float,
+        k: Int,
+        searchLimit: Int
+    ) async throws -> [ResolvedMatch] {
+        guard k > 0 else { return [] }
+
+        let page = try await context.fdbContext.findPolymorphic(E.self)
+            .vector(\.embedding, dimensions: E.embeddingDimensions)
+            .query(embedding, k: searchLimit)
+            .metric(.cosine)
+            .executePage()
+
+        var matches: [ResolvedMatch] = []
+        matches.reserveCapacity(min(k, page.results.count))
+
+        for result in page.results {
+            guard result.item is any Persistable & Entity & Sendable else { continue }
+            guard ObjectIdentifier(type(of: result.item)) == typeID else { continue }
+            guard let distance = result.annotations["distance"]?.doubleValue else {
+                throw MemoryError.invalidQuery("polymorphic vector result is missing distance annotation")
+            }
+            let similarity = 1 - Float(distance)
+            guard similarity >= threshold else { continue }
+            guard let entity = result.item as? any Entity else { continue }
+            let id = String(describing: result.item.id)
+            matches.append(ResolvedMatch(id: id, assertion: entity.assertion, similarity: similarity))
+        }
+
+        matches.sort { $0.similarity > $1.similarity }
+        if matches.count > k {
+            matches = Array(matches.prefix(k))
+        }
+        return matches
     }
 
     /// Truncate a long assertion for log output.
@@ -414,36 +485,48 @@ public actor Memory {
     ///
     /// For each candidate, embeds its `assertion` (natural-language class
     /// assertion), searches the shared Entity polymorphic vector index, and
-    /// returns the best match at or above the similarity threshold.
+    /// returns the top-K persisted entities whose similarity exceeds the
+    /// `threshold`. The caller (typically an LLM) decides which of those
+    /// candidates, if any, refers to the same entity as the input.
     ///
     /// Matches are filtered to the concrete Swift type `T`: a candidate will
     /// only resolve to persisted entities whose runtime type is `T`. The
     /// polymorphic index still spans every `Entity` subclass (so that recall
-    /// / spreading activation can cross types), but resolve/dedup must not
-    /// — otherwise mean-pooled assertion embeddings cause cross-class
+    /// / spreading activation can cross types), but resolve must not —
+    /// otherwise mean-pooled assertion embeddings cause cross-class
     /// collisions via shared surface vocabulary.
     ///
-    /// This API is for callers that want to inspect resolution results before
-    /// deciding what to store. Regular `store()` calls perform the same logic
-    /// internally, with the type filter applied per-entity using the entity's
-    /// runtime type.
+    /// This API is for callers that want the LLM to judge possible matches
+    /// before storing. Regular `store()` calls perform a **stricter**
+    /// similarity check internally (see `defaultResolutionThreshold`) as a
+    /// safety net; the intended flow is:
+    ///
+    /// 1. `resolve([...])` → LLM sees candidates with assertions
+    /// 2. If a candidate truly matches, the LLM copies its `assertion`
+    ///    verbatim into the `store` payload
+    /// 3. `store(...)` embeds the identical assertion, the safety net
+    ///    matches it to the existing record, and no duplicate is created
     ///
     /// - Parameters:
     ///   - candidates: Entity candidates, each with a natural-language assertion.
     ///   - witness: Concrete Entity type. Candidates are matched only against
     ///     persisted entities of this exact type.
-    ///   - threshold: Minimum similarity score to consider a match.
-    ///     Defaults to the store-side threshold.
-    /// - Returns: Resolution results for each candidate.
+    ///   - threshold: Minimum cosine similarity for a persisted entity to be
+    ///     returned as a candidate. Defaults to `defaultResolveThreshold`.
+    ///   - limit: Maximum candidates returned per input. Defaults to
+    ///     `defaultResolveLimit`.
+    /// - Returns: One `ResolvedEntity` per input, each with a (possibly
+    ///   empty) list of matching candidates sorted by similarity descending.
     public func resolve<T: Persistable & Entity>(
         _ candidates: [ResolveCandidate],
         witness: T.Type,
-        threshold: Float? = nil
+        threshold: Float? = nil,
+        limit: Int = Memory.defaultResolveLimit
     ) async throws -> [ResolvedEntity] {
-        let effectiveThreshold = threshold ?? resolutionThreshold
+        let effectiveThreshold = threshold ?? Self.defaultResolveThreshold
 
         guard let provider = context.embeddingProvider else {
-            logger.info("[resolve] no embedding provider — returning all unresolved")
+            logger.info("[resolve] no embedding provider — returning empty candidates")
             return candidates.map {
                 ResolvedEntity(inputAssertion: $0.assertion)
             }
@@ -458,28 +541,22 @@ public actor Memory {
 
         for candidate in candidates {
             let queryEmbedding = try await provider.embed(candidate.assertion)
-            let match = try await bestPersistedCandidate(
+            let matches = try await topPersistedCandidates(
                 witness: T.self,
                 typeID: witnessTypeID,
                 embedding: queryEmbedding,
                 threshold: effectiveThreshold,
-                limit: Self.resolutionSearchLimit
+                k: limit,
+                searchLimit: Self.resolutionSearchLimit
             )
-
-            if let match {
-                results.append(ResolvedEntity(
-                    inputAssertion: candidate.assertion,
-                    matchedID: match.candidate.id,
-                    matchedAssertion: match.candidate.assertion,
-                    similarity: match.similarity
-                ))
-            } else {
-                results.append(ResolvedEntity(inputAssertion: candidate.assertion))
-            }
+            results.append(ResolvedEntity(
+                inputAssertion: candidate.assertion,
+                candidates: matches
+            ))
         }
 
-        let resolvedCount = results.filter(\.isResolved).count
-        logger.info("[resolve] \(candidates.count) candidates -> \(resolvedCount) resolved")
+        let withCandidates = results.filter(\.hasCandidates).count
+        logger.info("[resolve] \(candidates.count) inputs -> \(withCandidates) with candidates (threshold=\(effectiveThreshold), limit=\(limit))")
         return results
     }
 

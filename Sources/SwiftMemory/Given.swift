@@ -14,7 +14,7 @@ public struct Given {
 
     #Index(ScalarIndexKind<Given>(fields: [\.timestamp]))
     #Index(ScalarIndexKind<Given>(fields: [\.source]))
-    #Index(VectorIndexKind<Given>(embedding: \.embedding, dimensions: 512, metric: .cosine))
+    #Index(VectorIndexKind<Given>(embedding: \.embedding, dimensions: 768, metric: .cosine))
 
     /// Time-sortable unique identifier (ULID).
     public var id: String = ULID().ulidString
@@ -38,7 +38,7 @@ public struct Given {
 extension Given {
 
     /// Embedding vector dimensionality used by the VectorIndex.
-    public static let embeddingDimensions: Int = 512
+    public static let embeddingDimensions: Int = 768
 
     /// IRI for use as Statement subject/object.
     public var iri: String { "memory:given/\(id)" }

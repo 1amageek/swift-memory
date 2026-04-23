@@ -38,7 +38,7 @@ public protocol Entity: Polymorphable {
     /// Embedding vector dimensionality for the shared Entity index.
     ///
     /// All conforming types registered in the same `Memory` instance MUST
-    /// agree on this value. A default of 512 is provided (AppleEmbeddingProvider
+    /// agree on this value. A default of 768 is provided (EmbeddingGemma 300M
     /// native dim); override only when substituting an `EmbeddingProvider` whose
     /// output dimensionality differs.
     static var embeddingDimensions: Int { get }
@@ -59,8 +59,8 @@ public protocol Entity: Polymorphable {
 // MARK: - Shared Constants
 
 extension Entity {
-    /// Default embedding dimensions: 512 (AppleEmbeddingProvider native).
-    public static var embeddingDimensions: Int { 512 }
+    /// Default embedding dimensions: 768 (EmbeddingGemma 300M native).
+    public static var embeddingDimensions: Int { 768 }
 }
 
 // MARK: - Polymorphable Conformance

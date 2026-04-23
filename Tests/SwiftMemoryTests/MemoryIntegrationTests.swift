@@ -243,11 +243,12 @@ struct MemoryIntegrationTests {
 
         let resolved = try await memory.resolve(
             [ResolveCandidate(assertion: "Acme is a company at acme.example")],
-            witness: TestPerson.self
+            witness: TestOrganization.self
         )
         let first = try #require(resolved.first)
-        #expect(first.isResolved)
-        #expect(first.matchedAssertion == "Acme is a company at acme.example")
+        #expect(first.hasCandidates)
+        #expect(first.candidates.first?.assertion == "Acme is a company at acme.example")
+        #expect((first.topSimilarity ?? 0) > 0.99)
     }
 
     @Test("Direct fdbContext.insert writes to polymorphic directory")
