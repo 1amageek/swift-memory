@@ -20,14 +20,24 @@ public struct MemoryBatch: Sendable {
     /// e.g. ("Alice", "ex:worksAt", "Acme") — inter-entity relationships.
     public var statements: [StatementRecord]
 
+    /// Human-facing endpoint aliases for entities in this batch.
+    ///
+    /// Keys are labels or names that an interpreting agent may use in a
+    /// relationship endpoint. Values are entity assertions or explicit IDs.
+    /// Store-time canonicalization rewrites matching endpoints to the resolved
+    /// entity ID. Non-matching endpoints remain loose graph terms.
+    public var aliases: [String: String]
+
     public static let empty = MemoryBatch(entities: [], statements: [])
 
     public init(
         entities: [any Persistable & Entity & Sendable] = [],
-        statements: [StatementRecord] = []
+        statements: [StatementRecord] = [],
+        aliases: [String: String] = [:]
     ) {
         self.entities = entities
         self.statements = statements
+        self.aliases = aliases
     }
 
     // MARK: - Builder Methods
@@ -38,6 +48,9 @@ public struct MemoryBatch: Sendable {
     }
 
     /// Add an explicit relationship triple.
+    ///
+    /// Endpoints remain loose graph terms unless they match a resolved entity
+    /// ID, assertion, or registered alias during `Memory.store()`.
     public mutating func triple(
         _ subject: String,
         _ predicate: String,
@@ -46,12 +59,18 @@ public struct MemoryBatch: Sendable {
         statements.append(StatementRecord(subject: subject, predicate: predicate, object: object))
     }
 
+    /// Register a human-facing alias for an entity assertion or ID.
+    public mutating func alias(_ alias: String, for target: String) {
+        aliases[alias] = target
+    }
+
     // MARK: - Merge
 
     public func merging(_ other: MemoryBatch) -> MemoryBatch {
         MemoryBatch(
             entities: entities + other.entities,
-            statements: statements + other.statements
+            statements: statements + other.statements,
+            aliases: aliases.merging(other.aliases) { _, new in new }
         )
     }
 }

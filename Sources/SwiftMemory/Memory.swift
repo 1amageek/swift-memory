@@ -177,12 +177,17 @@ public actor Memory {
             givenID = id
         }
 
-        // Statements + optional traces. Subject/object are remapped using the
-        // entity resolution result so that relationships point at the canonical
-        // entity when a match occurred.
+        let endpointResolver = StatementEndpointResolver(
+            resolvedEntityReferences: resolutionMap,
+            aliases: batch.aliases
+        )
+
+        // Statements + optional traces. Endpoints that match a resolved entity
+        // ID, assertion, or alias are rewritten to the canonical entity ID.
+        // Non-matching endpoints remain loose graph terms.
         for record in batch.statements {
-            let subject = resolutionMap[record.subject] ?? record.subject
-            let object = resolutionMap[record.object] ?? record.object
+            let subject = endpointResolver.resolve(record.subject)
+            let object = endpointResolver.resolve(record.object)
             let statementID = Statement.contentID(
                 graph: context.graphName,
                 subject: subject,
@@ -228,7 +233,7 @@ public actor Memory {
     /// later entities in the same batch resolve against them (self-collision
     /// handling).
     ///
-    /// - Returns: Map from input entity assertion to the resolved entity ID.
+    /// - Returns: Map from input entity IDs/assertions to the resolved entity ID.
     private func resolveAndInsertEntities(
         _ entities: [any Persistable & Entity & Sendable],
         provider: any EmbeddingProvider
@@ -255,6 +260,7 @@ public actor Memory {
         for entity in entities {
             let queryVec = try await provider.embed(entity.assertion)
             let entityTypeID = ObjectIdentifier(type(of: entity))
+            let inputID = String(describing: entity.id)
 
             let persistedMatch = try await bestPersistedCandidate(
                 witness: E.self,
@@ -273,6 +279,8 @@ public actor Memory {
 
             if let match = bestMatch {
                 resolutionMap[entity.assertion] = match.candidate.id
+                resolutionMap[inputID] = match.candidate.id
+                resolutionMap[match.candidate.id] = match.candidate.id
                 logger.info(
                     "[resolve] match '\(Self.shortAssertion(entity.assertion))' -> '\(Self.shortAssertion(match.candidate.assertion))' sim=\(match.similarity)"
                 )
@@ -283,6 +291,8 @@ public actor Memory {
 
                 let newID = String(describing: mutable.id)
                 resolutionMap[entity.assertion] = newID
+                resolutionMap[inputID] = newID
+                resolutionMap[newID] = newID
 
                 pendingCandidates.append(ResolutionCandidate(
                     id: newID,
@@ -307,6 +317,43 @@ public actor Memory {
     }
 
     private typealias ResolutionMatch = (candidate: ResolutionCandidate, similarity: Float)
+
+    private struct StatementEndpointResolver {
+        let resolvedEntityReferences: [String: String]
+        let aliases: [String: String]
+
+        func resolve(_ endpoint: String) -> String {
+            if let id = resolvedEntityReferences[endpoint] {
+                return id
+            }
+
+            if let aliasTarget = aliases[endpoint],
+               let id = resolvedEntityReferences[aliasTarget] {
+                return id
+            }
+
+            let key = normalized(endpoint)
+            if let id = resolvedEntityReferences.first(where: { normalized($0.key) == key })?.value {
+                return id
+            }
+
+            if let aliasTarget = aliases.first(where: { normalized($0.key) == key })?.value,
+               let id = resolvedEntityReferences[aliasTarget] {
+                return id
+            }
+
+            return endpoint
+        }
+
+        private func normalized(_ value: String) -> String {
+            value
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .folding(
+                    options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
+                    locale: .current
+                )
+        }
+    }
 
     /// Search the shared `Entity` polymorphic vector index and return the best
     /// match whose **concrete Swift type** matches `typeID`.

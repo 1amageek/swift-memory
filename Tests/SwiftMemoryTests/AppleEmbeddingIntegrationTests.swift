@@ -5,7 +5,7 @@ import NaturalLanguage
 import MemoryOntology
 import Database
 
-// Test entity for AppleEmbeddingProvider. Uses the default 512-dim
+// Test entity for AppleEmbeddingProvider. Uses the explicit 512-dim
 // `embeddingDimensions` which matches the English NLContextualEmbedding
 // model output.
 @Persistable @OWLClass("ex:Person")
@@ -17,6 +17,10 @@ struct AppleTestPerson: Entity {
     var name: String
     var assertion: String = ""
     var embedding: [Float] = []
+}
+
+extension AppleTestPerson {
+    static var embeddingDimensions: Int { 512 }
 }
 
 @Suite("Apple Embedding Integration Tests", .serialized)

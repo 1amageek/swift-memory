@@ -30,12 +30,20 @@ struct TestOrganization: Entity {
     var embedding: [Float] = []
 }
 
+extension TestPerson {
+    static var embeddingDimensions: Int { Given.embeddingDimensions }
+}
+
+extension TestOrganization {
+    static var embeddingDimensions: Int { Given.embeddingDimensions }
+}
+
 /// Deterministic stub used by tests that need a Memory with a provider.
 /// Returns a seeded embedding that depends only on the input text, so two
 /// different strings produce different vectors and identical strings produce
 /// identical vectors.
 private struct StubEmbeddingProvider: EmbeddingProvider {
-    let dimensions: Int = 512
+    let dimensions: Int = Given.embeddingDimensions
 
     func embed(_ text: String) async throws -> [Float] {
         var vec = [Float](repeating: 0, count: dimensions)
@@ -283,7 +291,7 @@ struct MemoryIntegrationTests {
         // Bypass Memory's resolve pipeline — insert directly via fdbContext to
         // isolate the dual-write code path from entity-resolution logic.
         var alice = TestPerson(name: "Alice", assertion: "Alice is a person")
-        alice.embedding = [Float](repeating: 0, count: 512)
+        alice.embedding = [Float](repeating: 0, count: TestPerson.embeddingDimensions)
         try await memory._debugDirectInsertAndCommit(alice)
 
         let concrete = try await memory._debugFetchAll(TestPerson.self)
@@ -399,6 +407,31 @@ struct MemoryIntegrationTests {
             predicate: "rdfs:comment",
             object: "loves memory"
         ))
+    }
+
+    @Test("Statement endpoints matching entity aliases are remapped to resolved entity IDs")
+    func statementEndpointAliasesRemapToResolvedEntities() async throws {
+        let memory = try await Memory(
+            path: nil,
+            entityTypes: [TestOrganization.self],
+            embeddingProvider: StubEmbeddingProvider()
+        )
+
+        let assertion = "TSMC is a semiconductor foundry"
+        var batch = MemoryBatch()
+        batch.entity(TestOrganization(name: "TSMC", domain: "tsmc.com", assertion: assertion))
+        batch.alias("TSMC", for: assertion)
+        batch.triple("TSMC", "ex:produces", "TSMC N2")
+        try await memory.store(batch)
+
+        let entities = try await memory._debugEntities(witness: TestOrganization.self)
+        let tsmc = try #require(entities.first as? TestOrganization)
+        let statements = try await memory._debugFetchAll(Statement.self)
+        let remapped = statements.first {
+            $0.predicate == "ex:produces" && $0.object == "TSMC N2"
+        }
+
+        #expect(remapped?.subject == tsmc.id)
     }
 
     @Test("Statement contentID is deterministic")
