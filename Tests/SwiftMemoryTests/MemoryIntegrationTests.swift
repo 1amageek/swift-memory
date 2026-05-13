@@ -240,8 +240,10 @@ struct MemoryIntegrationTests {
         )
 
         var batch = MemoryBatch()
-        batch.entity(TestPerson(name: "Alice", assertion: "Alice is a person"))
-        batch.entity(TestOrganization(name: "Acme", domain: "acme.example", assertion: "Acme is a company at acme.example"))
+        batch.entity(TestPerson(name: "Alice", assertion: ":Alice a :Person ."))
+        batch.entity(TestOrganization(name: "Acme", domain: "acme.example", assertion: ":Acme a :Organization ."))
+        batch.alias("Acme", for: ":Acme a :Organization .")
+        batch.triple("Acme", "ex:operatesDomain", "acme.example")
         try await memory.store(batch)
 
         let entities = try await memory._debugEntities(witness: TestPerson.self)
@@ -250,12 +252,15 @@ struct MemoryIntegrationTests {
         #expect(entities.contains { $0 is TestOrganization })
 
         let resolved = try await memory.resolve(
-            [ResolveCandidate(assertion: "Acme is a company at acme.example")],
+            [ResolveCandidate(assertion: ":Acme a :Organization .")],
             witness: TestOrganization.self
         )
         let first = try #require(resolved.first)
         #expect(first.hasCandidates)
-        #expect(first.candidates.first?.assertion == "Acme is a company at acme.example")
+        #expect(first.candidates.first?.assertion == ":Acme a :Organization .")
+        #expect(first.candidates.first?.label == "Acme")
+        #expect(first.candidates.first?.type == ":Organization")
+        #expect(first.candidates.first?.context.contains { $0.predicate == "ex:operatesDomain" && $0.object == "acme.example" } == true)
         #expect((first.topSimilarity ?? 0) > 0.99)
     }
 
@@ -290,7 +295,7 @@ struct MemoryIntegrationTests {
 
         // Bypass Memory's resolve pipeline — insert directly via fdbContext to
         // isolate the dual-write code path from entity-resolution logic.
-        var alice = TestPerson(name: "Alice", assertion: "Alice is a person")
+        var alice = TestPerson(name: "Alice", assertion: ":Alice a :Person .")
         alice.embedding = [Float](repeating: 0, count: TestPerson.embeddingDimensions)
         try await memory._debugDirectInsertAndCommit(alice)
 
@@ -308,8 +313,8 @@ struct MemoryIntegrationTests {
                 "polymorphic fetch should see 1 record; raw=\(rawPolyKeys) concrete=\(concrete.count)")
     }
 
-    @Test("Entity with identical assertion is deduplicated")
-    func entityIdenticalIsDeduplicated() async throws {
+    @Test("Entity with identical assertion is inserted when stored in separate payloads")
+    func entityIdenticalAcrossPayloadsIsCallerControlled() async throws {
         let memory = try await Memory(
             path: nil,
             entityTypes: [TestPerson.self],
@@ -317,7 +322,7 @@ struct MemoryIntegrationTests {
         )
 
         var first = MemoryBatch()
-        first.entity(TestPerson(name: "Alice", assertion: "Alice is a person"))
+        first.entity(TestPerson(name: "Alice", assertion: ":Alice a :Person ."))
         try await memory.store(first)
 
         let concreteAfterFirst = try await memory._debugFetchAll(TestPerson.self)
@@ -326,13 +331,13 @@ struct MemoryIntegrationTests {
         #expect(polyAfterFirst == 1)
 
         var second = MemoryBatch()
-        second.entity(TestPerson(name: "Alice", assertion: "Alice is a person"))
+        second.entity(TestPerson(name: "Alice", assertion: ":Alice a :Person ."))
         try await memory.store(second)
 
         let concreteAfterSecond = try await memory._debugFetchAll(TestPerson.self)
         let polyAfterSecond = try await memory._debugEntityCount(witness: TestPerson.self)
-        #expect(concreteAfterSecond.count == 1)
-        #expect(polyAfterSecond == 1)
+        #expect(concreteAfterSecond.count == 2)
+        #expect(polyAfterSecond == 2)
     }
 
     @Test("Entity with different assertion is inserted as a new record")
@@ -344,11 +349,11 @@ struct MemoryIntegrationTests {
         )
 
         var first = MemoryBatch()
-        first.entity(TestPerson(name: "Alice", assertion: "Alice is a person"))
+        first.entity(TestPerson(name: "Alice", assertion: ":Alice a :Person ."))
         try await memory.store(first)
 
         var second = MemoryBatch()
-        second.entity(TestPerson(name: "Bob", assertion: "Bob is a person"))
+        second.entity(TestPerson(name: "Bob", assertion: ":Bob a :Person ."))
         try await memory.store(second)
 
         let count = try await memory._debugEntityCount(witness: TestPerson.self)
@@ -364,23 +369,23 @@ struct MemoryIntegrationTests {
         )
 
         var batch = MemoryBatch()
-        batch.entity(TestPerson(name: "Alice", assertion: "Alice is a person"))
-        batch.entity(TestPerson(name: "Alice", assertion: "Alice is a person"))
+        batch.entity(TestPerson(name: "Alice", assertion: ":Alice a :Person ."))
+        batch.entity(TestPerson(name: "Alice", assertion: ":Alice a :Person ."))
         try await memory.store(batch)
 
         let count = try await memory._debugEntityCount(witness: TestPerson.self)
         #expect(count == 1)
     }
 
-    @Test("Statement subject is remapped to resolved entity ID")
-    func statementRemappedToResolvedEntity() async throws {
+    @Test("Statement can target an existing resolved entity ID without reinserting it")
+    func statementCanTargetResolvedEntityID() async throws {
         let memory = try await Memory(
             path: nil,
             entityTypes: [TestPerson.self],
             embeddingProvider: StubEmbeddingProvider()
         )
 
-        let assertion = "Alice is a person"
+        let assertion = ":Alice a :Person ."
         var initial = MemoryBatch()
         initial.entity(TestPerson(name: "Alice", assertion: assertion))
         try await memory.store(initial)
@@ -388,13 +393,12 @@ struct MemoryIntegrationTests {
         let existing = try await memory._debugEntities(witness: TestPerson.self)
         let persistedAlice = try #require(existing.first as? TestPerson)
 
-        // Store again with a statement referencing the entity's assertion.
-        // The resolver should map the assertion to the persisted entity ID and
-        // rewrite the statement subject.
         var followup = MemoryBatch()
-        followup.entity(TestPerson(name: "Alice", assertion: assertion))
-        followup.triple(assertion, "rdfs:comment", "loves memory")
+        followup.triple(persistedAlice.id, "rdfs:comment", "loves memory")
         try await memory.store(followup)
+
+        let entitiesAfterFollowup = try await memory._debugEntities(witness: TestPerson.self)
+        #expect(entitiesAfterFollowup.count == 1)
 
         let statements = try await memory._debugFetchAll(Statement.self)
         let remapped = statements.first {
@@ -417,7 +421,7 @@ struct MemoryIntegrationTests {
             embeddingProvider: StubEmbeddingProvider()
         )
 
-        let assertion = "TSMC is a semiconductor foundry"
+        let assertion = ":TSMC a :Organization ."
         var batch = MemoryBatch()
         batch.entity(TestOrganization(name: "TSMC", domain: "tsmc.com", assertion: assertion))
         batch.alias("TSMC", for: assertion)

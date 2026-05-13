@@ -1,5 +1,5 @@
 // OWLOntology+Hoot.swift
-// OWLOntology → HOOT format conversion (from AURORA)
+// OWLOntology → HOOT format conversion
 
 import Database
 import Hoot

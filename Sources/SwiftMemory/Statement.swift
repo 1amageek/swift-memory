@@ -1,5 +1,5 @@
 // Statement.swift
-// RDF Triple persistence model (adapted from AURORA)
+// RDF Triple persistence model
 
 import Foundation
 import Database
@@ -7,7 +7,6 @@ import Database
 /// An RDF triple stored in the knowledge graph.
 ///
 /// Named `Statement` to avoid conflict with `Hoot.RDFTriple`.
-/// Adapted from AURORA's RDFTriple with memory-specific directory and graph defaults.
 @Persistable
 public struct Statement: Hashable {
 

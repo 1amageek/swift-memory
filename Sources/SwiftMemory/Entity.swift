@@ -23,10 +23,9 @@ import Vector
 /// Changing dimensions or metric requires rebuilding the entire polymorphic index.
 ///
 /// **Class Assertion Embedding**:
-/// The `assertion` field is a natural-language class assertion identifying the entity
-/// (e.g., "Acme Inc is a company that provides cloud infrastructure services").
-/// The embedding of `assertion` carries the entity's semantic identity and is what
-/// drives cross-type resolution.
+/// The `assertion` field is an RDF/Turtle class assertion. The embedding of
+/// `assertion` is used only for candidate retrieval; final identity judgment
+/// should be made by the caller using returned candidates and graph context.
 ///
 /// **Storage Layout**:
 /// ```
@@ -43,11 +42,10 @@ public protocol Entity: Polymorphable {
     /// output dimensionality differs.
     static var embeddingDimensions: Int { get }
 
-    /// Natural-language class assertion identifying this entity.
+    /// RDF/Turtle class assertion for candidate retrieval.
     ///
-    /// Example: `"Google is a company"`, `"Alice is a person who works at Anthropic"`.
-    /// This text is what gets embedded; the embedding carries the entity's semantic
-    /// identity for cross-type resolution.
+    /// The assertion should not contain identity hints. Use ordinary typed
+    /// fields and statements for disambiguating context.
     var assertion: String { get set }
 
     /// Embedding vector of `assertion`.

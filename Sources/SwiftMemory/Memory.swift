@@ -8,19 +8,17 @@ import os.log
 
 private let logger = Logger(subsystem: "com.memory", category: "Memory")
 
-/// Knowledge persistence system for LLM agents.
+/// Knowledge persistence and recall system.
 ///
 /// Memory stores and recalls knowledge. It does **not** interpret raw input.
 ///
-/// Interpretation is the responsibility of an external agent:
-/// - A nested agent (e.g. haiku) analyzes conversation and structures knowledge
-/// - The agent calls `store(batch)` with entities and relationships
+/// Interpretation is the responsibility of an external caller:
+/// - The caller analyzes raw input and structures knowledge
+/// - The caller calls `store(batch)` with entities and relationships
 /// - Memory persists them and enables recall via spreading activation
 ///
-/// Entities are deduplicated on store via embedding similarity. When a new
-/// entity's assertion embedding matches an existing entity above the
-/// configured threshold, the incoming entity is discarded and the relationship
-/// statements are remapped to the resolved identifier.
+/// Entities are deduplicated within a single store payload. Identity against
+/// already-persisted entities is handled by resolve → caller judgment → store.
 ///
 /// ```swift
 /// let memory = try await Memory(
@@ -29,39 +27,29 @@ private let logger = Logger(subsystem: "com.memory", category: "Memory")
 ///     embeddingProvider: MLXEmbeddingProvider()
 /// )
 ///
-/// // Store (called by the interpreting agent via MCP tool)
+/// // Store structured knowledge
 /// var batch = MemoryBatch()
 /// batch.entity(person)
 /// batch.triple("ex:alice", "ex:worksAt", "ex:acme")
 /// try await memory.store(batch)
 ///
-/// // Recall (called by Claude via MCP tool)
+/// // Recall associated knowledge
 /// let result = try await memory.recall(keywords: ["Alice"])
 /// ```
 public actor Memory {
 
-    /// Default cosine-similarity threshold used by `store()` to treat a new
-    /// entity as a duplicate of an existing one.
-    ///
-    /// Chosen to sit between the observed intra-class false-positive ceiling
-    /// (~0.94 for mean-pooled `NLContextualEmbedding` assertions that share
-    /// surface vocabulary but denote different entities) and the same-entity
-    /// true-positive floor (~0.98 for identical/near-identical assertions).
+    /// Default cosine-similarity threshold used by `store()` to collapse
+    /// duplicate entities within one payload.
     public static let defaultResolutionThreshold: Float = 0.95
 
     /// Default cosine-similarity threshold used by `resolve()` to surface
-    /// possible matches to the caller (typically an LLM).
-    ///
-    /// Much looser than `defaultResolutionThreshold` because the resolve API
-    /// returns top-K candidates for external judgment. The threshold only
-    /// filters out vectors that are almost certainly unrelated; the final
-    /// match decision is made by the LLM examining assertions side by side.
-    public static let defaultResolveThreshold: Float = 0.70
+    /// possible matches to the caller.
+    public static let defaultResolveThreshold: Float = 0.90
 
     /// Default maximum number of candidates returned per input by `resolve()`.
-    public static let defaultResolveLimit: Int = 10
+    public static let defaultResolveLimit: Int = 30
 
-    private static let resolutionSearchLimit = 200
+    private static let resolutionSearchLimit = 30
 
     private let context: MemoryContext
     private let container: DBContainer
@@ -110,16 +98,16 @@ public actor Memory {
     /// Store Given + Knowledge atomically.
     ///
     /// Given is the raw material. Knowledge is the structured interpretation.
-    /// Entities are deduplicated via embedding similarity; statements are
-    /// remapped to resolved identifiers. Trace records link each Statement
-    /// back to its source Given.
+    /// Entities are deduplicated within the payload; statements are remapped
+    /// to identifiers resolved in the payload. Trace records link each
+    /// Statement back to its source Given.
     public func store(given: any Memorable, knowledge: some MemoryBatchConvertible) async throws {
         let batch = knowledge.toBatch()
         try await persist(given: given, batch: batch)
     }
 
     /// Store Given + Knowledge from raw JSON data and a decode closure.
-    /// Used by MCP tool handlers where knowledge arrives as JSON bytes.
+    /// Used by transport adapters where knowledge arrives as JSON bytes.
     public func store(
         given: any Memorable,
         knowledgeData: Data,
@@ -222,12 +210,11 @@ public actor Memory {
 
     /// Resolve and insert each entity in the batch.
     ///
-    /// For every input entity, computes a query embedding from its `assertion`
-    /// (a natural-language class assertion like "Alice is a person") and
-    /// searches the shared polymorphic vector index using the `Entity.embedding`
-    /// KeyPath. If the best cosine similarity is at or above the threshold,
-    /// the input is treated as a duplicate and no new record is created.
-    /// Otherwise the input is inserted with its embedding.
+    /// For every input entity, computes a query embedding from its RDF/Turtle
+    /// class assertion and compares it against entities already staged in this
+    /// payload. If the best cosine similarity is at or above the threshold, the
+    /// input is treated as an in-payload duplicate and no new record is
+    /// created. Otherwise the input is inserted with its embedding.
     ///
     /// Newly inserted entities are appended to the candidate list so that
     /// later entities in the same batch resolve against them (self-collision
@@ -262,22 +249,14 @@ public actor Memory {
             let entityTypeID = ObjectIdentifier(type(of: entity))
             let inputID = String(describing: entity.id)
 
-            let persistedMatch = try await bestPersistedCandidate(
-                witness: E.self,
-                typeID: entityTypeID,
-                embedding: queryVec,
-                threshold: resolutionThreshold,
-                limit: Self.resolutionSearchLimit
-            )
             let pendingMatch = bestCandidate(
                 in: pendingCandidates,
                 typeID: entityTypeID,
                 embedding: queryVec,
                 threshold: resolutionThreshold
             )
-            let bestMatch = strongerMatch(persistedMatch, pendingMatch)
 
-            if let match = bestMatch {
+            if let match = pendingMatch {
                 resolutionMap[entity.assertion] = match.candidate.id
                 resolutionMap[inputID] = match.candidate.id
                 resolutionMap[match.candidate.id] = match.candidate.id
@@ -355,90 +334,13 @@ public actor Memory {
         }
     }
 
-    /// Search the shared `Entity` polymorphic vector index and return the best
-    /// match whose **concrete Swift type** matches `typeID`.
-    ///
-    /// The polymorphic index intentionally spans every `Entity` subclass to
-    /// support cross-type recall (spreading activation). For resolve/dedup,
-    /// however, a candidate must only collide with persisted entities of the
-    /// same concrete type — otherwise mean-pooled assertion embeddings cause
-    /// cross-class contamination (e.g. an `Organization` candidate resolving
-    /// to a persisted `Service` simply because they share surface vocabulary).
-    /// This method performs the post-filter.
-    private func bestPersistedCandidate<E: Persistable & Entity & Sendable>(
-        witness: E.Type,
-        typeID: ObjectIdentifier,
-        embedding: [Float],
-        threshold: Float,
-        limit: Int
-    ) async throws -> ResolutionMatch? {
-        let page = try await context.fdbContext.findPolymorphic(E.self)
-            .vector(\.embedding, dimensions: E.embeddingDimensions)
-            .query(embedding, k: limit)
-            .metric(.cosine)
-            .executePage()
-
-        var best: (id: String, similarity: Float)?
-        var topSameType: (id: String, similarity: Float, assertion: String)?
-        for result in page.results {
-            guard result.item is any Persistable & Entity & Sendable else {
-                continue
-            }
-            guard ObjectIdentifier(type(of: result.item)) == typeID else {
-                continue
-            }
-            guard let distance = result.annotations["distance"]?.doubleValue else {
-                throw MemoryError.invalidQuery("polymorphic vector result is missing distance annotation")
-            }
-
-            let similarity = 1 - Float(distance)
-            let id = String(describing: result.item.id)
-
-            if topSameType == nil || similarity > topSameType!.similarity {
-                let assertion = (result.item as? any Entity)?.assertion ?? ""
-                topSameType = (id: id, similarity: similarity, assertion: assertion)
-            }
-
-            guard similarity >= threshold else { continue }
-
-            if best == nil || similarity > best!.similarity {
-                best = (id: id, similarity: similarity)
-            }
-        }
-
-        guard let best else {
-            if let top = topSameType {
-                logger.info("[resolve] miss top=\(top.similarity) threshold=\(threshold) candidate='\(Self.shortAssertion(top.assertion))'")
-            } else {
-                logger.info("[resolve] miss no same-type candidate threshold=\(threshold)")
-            }
-            return nil
-        }
-        guard let item = try await context.fdbContext.fetchPolymorphic(E.self, id: best.id),
-              let entity = item as? any Persistable & Entity & Sendable else {
-            return nil
-        }
-
-        return (
-            ResolutionCandidate(
-                id: best.id,
-                assertion: entity.assertion,
-                embedding: entity.embedding,
-                typeID: ObjectIdentifier(type(of: item)),
-                persistable: entity
-            ),
-            best.similarity
-        )
-    }
-
     /// Return up to `k` persisted `E` entities (runtime type == `typeID`)
     /// whose cosine similarity to `embedding` clears `threshold`, sorted by
     /// similarity descending.
     ///
     /// Used by the public `resolve` API to surface possible matches for
-    /// external (LLM) judgment. The internal store-time dedup path uses
-    /// the stricter `bestPersistedCandidate` instead — a threshold gap
-    /// between "worth showing" and "auto-dedupe" is intentional.
+    /// external caller judgment. Store-time persistence does not call this path
+    /// for already-persisted entities.
     private func topPersistedCandidates<E: Persistable & Entity & Sendable>(
         witness: E.Type,
         typeID: ObjectIdentifier,
@@ -468,7 +370,17 @@ public actor Memory {
             guard similarity >= threshold else { continue }
             guard let entity = result.item as? any Entity else { continue }
             let id = String(describing: result.item.id)
-            matches.append(ResolvedMatch(id: id, assertion: entity.assertion, similarity: similarity))
+            let label = entityLabel(from: result.item, fallback: id)
+            let type = entityType(from: entity.assertion, fallback: String(describing: Swift.type(of: result.item)))
+            let context = try await resolveOneHopContext(for: id)
+            matches.append(ResolvedMatch(
+                id: id,
+                assertion: entity.assertion,
+                similarity: similarity,
+                label: label,
+                type: type,
+                context: context
+            ))
         }
 
         matches.sort { $0.similarity > $1.similarity }
@@ -482,6 +394,85 @@ public actor Memory {
     private static func shortAssertion(_ assertion: String, limit: Int = 64) -> String {
         if assertion.count <= limit { return assertion }
         return String(assertion.prefix(limit)) + "…"
+    }
+
+    private func entityLabel(from item: Any, fallback: String) -> String {
+        let mirror = Mirror(reflecting: item)
+        for key in ["name", "title", "label"] {
+            if let value = stringProperty(named: key, in: mirror), !value.isEmpty {
+                return value
+            }
+        }
+        return fallback
+    }
+
+    private func stringProperty(named name: String, in mirror: Mirror) -> String? {
+        for child in mirror.children where child.label == name {
+            return child.value as? String
+        }
+        return nil
+    }
+
+    private func entityType(from assertion: String, fallback: String) -> String {
+        let tokens = assertion
+            .replacingOccurrences(of: ".", with: " ")
+            .split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" })
+            .map(String.init)
+        guard let predicateIndex = tokens.firstIndex(of: "a"),
+              tokens.indices.contains(tokens.index(after: predicateIndex)) else {
+            return fallback
+        }
+        return tokens[tokens.index(after: predicateIndex)]
+    }
+
+    private func resolveOneHopContext(for iri: String) async throws -> [ResolvedContextStatement] {
+        var contextStatements: [ResolvedContextStatement] = []
+
+        let outgoing = try await context.fdbContext.sparql(graph: context.graphName)
+            .where(iri, "?predicate", "?object")
+            .select(["?predicate", "?object"])
+            .execute()
+        for binding in outgoing.bindings {
+            guard let predicate = binding.string("?predicate"),
+                  let object = binding.string("?object") else { continue }
+            contextStatements.append(ResolvedContextStatement(
+                direction: .outgoing,
+                subject: iri,
+                predicate: predicate,
+                object: cleanLiteral(object)
+            ))
+        }
+
+        let incoming = try await context.fdbContext.sparql(graph: context.graphName)
+            .where("?subject", "?predicate", iri)
+            .select(["?subject", "?predicate"])
+            .execute()
+        for binding in incoming.bindings {
+            guard let subject = binding.string("?subject"),
+                  let predicate = binding.string("?predicate") else { continue }
+            contextStatements.append(ResolvedContextStatement(
+                direction: .incoming,
+                subject: subject,
+                predicate: predicate,
+                object: iri
+            ))
+        }
+
+        return contextStatements
+    }
+
+    private func cleanLiteral(_ raw: String) -> String {
+        guard raw.hasPrefix("\"") else { return raw }
+        if let range = raw.range(of: "\"^^", options: .backwards) {
+            return String(raw[raw.index(after: raw.startIndex)..<range.lowerBound])
+        }
+        if let range = raw.range(of: "\"@", options: .backwards) {
+            return String(raw[raw.index(after: raw.startIndex)..<range.lowerBound])
+        }
+        if raw.hasSuffix("\"") {
+            return String(raw.dropFirst().dropLast())
+        }
+        return raw
     }
 
     /// Find the best intra-batch pending match whose concrete Swift type
@@ -530,11 +521,10 @@ public actor Memory {
 
     /// Resolve entity candidates against existing knowledge without inserting.
     ///
-    /// For each candidate, embeds its `assertion` (natural-language class
-    /// assertion), searches the shared Entity polymorphic vector index, and
-    /// returns the top-K persisted entities whose similarity exceeds the
-    /// `threshold`. The caller (typically an LLM) decides which of those
-    /// candidates, if any, refers to the same entity as the input.
+    /// For each candidate, embeds its RDF/Turtle class assertion, searches the
+    /// shared Entity polymorphic vector index, and returns the top-K persisted
+    /// entities whose similarity exceeds the `threshold`, including one-hop
+    /// graph context for caller judgment.
     ///
     /// Matches are filtered to the concrete Swift type `T`: a candidate will
     /// only resolve to persisted entities whose runtime type is `T`. The
@@ -543,19 +533,17 @@ public actor Memory {
     /// otherwise mean-pooled assertion embeddings cause cross-class
     /// collisions via shared surface vocabulary.
     ///
-    /// This API is for callers that want the LLM to judge possible matches
-    /// before storing. Regular `store()` calls perform a **stricter**
-    /// similarity check internally (see `defaultResolutionThreshold`) as a
-    /// safety net; the intended flow is:
+    /// This API is for callers that need to judge possible matches
+    /// before storing. Regular `store()` calls only collapse duplicate entities
+    /// within the current payload; the intended flow is:
     ///
-    /// 1. `resolve([...])` → LLM sees candidates with assertions
-    /// 2. If a candidate truly matches, the LLM copies its `assertion`
-    ///    verbatim into the `store` payload
-    /// 3. `store(...)` embeds the identical assertion, the safety net
-    ///    matches it to the existing record, and no duplicate is created
+    /// 1. `resolve([...])` returns candidates with one-hop context
+    /// 2. If a candidate truly matches, the caller should reuse its stable ID
+    ///    in statements and avoid inserting a duplicate entity.
+    /// 3. `store(...)` persists the final reviewed knowledge payload.
     ///
     /// - Parameters:
-    ///   - candidates: Entity candidates, each with a natural-language assertion.
+    ///   - candidates: Entity candidates, each with an RDF/Turtle class assertion.
     ///   - witness: Concrete Entity type. Candidates are matched only against
     ///     persisted entities of this exact type.
     ///   - threshold: Minimum cosine similarity for a persisted entity to be
@@ -604,6 +592,63 @@ public actor Memory {
 
         let withCandidates = results.filter(\.hasCandidates).count
         logger.info("[resolve] \(candidates.count) inputs -> \(withCandidates) with candidates (threshold=\(effectiveThreshold), limit=\(limit))")
+        return results
+    }
+
+    /// Resolve concrete entity instances against existing knowledge without
+    /// inserting. This is the preferred pre-store path for callers that already
+    /// hold typed entity instances because it uses each candidate's concrete
+    /// runtime type for filtering.
+    public func resolve(
+        _ entities: [any Persistable & Entity & Sendable],
+        threshold: Float? = nil,
+        limit: Int = Memory.defaultResolveLimit
+    ) async throws -> [ResolvedEntity] {
+        guard let first = entities.first else { return [] }
+        return try await _resolveEntities(
+            entities,
+            witness: first,
+            threshold: threshold,
+            limit: limit
+        )
+    }
+
+    private func _resolveEntities<E: Persistable & Entity & Sendable>(
+        _ entities: [any Persistable & Entity & Sendable],
+        witness: E,
+        threshold: Float?,
+        limit: Int
+    ) async throws -> [ResolvedEntity] {
+        let effectiveThreshold = threshold ?? Self.defaultResolveThreshold
+
+        guard let provider = context.embeddingProvider else {
+            logger.info("[resolve] no embedding provider — returning empty candidates")
+            return entities.map {
+                ResolvedEntity(inputAssertion: $0.assertion)
+            }
+        }
+
+        var results: [ResolvedEntity] = []
+        results.reserveCapacity(entities.count)
+
+        for entity in entities {
+            let queryEmbedding = try await provider.embed(entity.assertion)
+            let matches = try await topPersistedCandidates(
+                witness: E.self,
+                typeID: ObjectIdentifier(type(of: entity)),
+                embedding: queryEmbedding,
+                threshold: effectiveThreshold,
+                k: limit,
+                searchLimit: Self.resolutionSearchLimit
+            )
+            results.append(ResolvedEntity(
+                inputAssertion: entity.assertion,
+                candidates: matches
+            ))
+        }
+
+        let withCandidates = results.filter(\.hasCandidates).count
+        logger.info("[resolve] \(entities.count) entity inputs -> \(withCandidates) with candidates (threshold=\(effectiveThreshold), limit=\(limit))")
         return results
     }
 
