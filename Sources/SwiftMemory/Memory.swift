@@ -269,6 +269,7 @@ public actor Memory {
                 context.fdbContext.insert(mutable)
 
                 let newID = String(describing: mutable.id)
+                insertEntityIdentityStatements(id: newID, entity: mutable)
                 resolutionMap[entity.assertion] = newID
                 resolutionMap[inputID] = newID
                 resolutionMap[newID] = newID
@@ -285,6 +286,39 @@ public actor Memory {
         }
 
         return resolutionMap
+    }
+
+    private func insertEntityIdentityStatements(
+        id: String,
+        entity: any Entity
+    ) {
+        let label = entityLabel(from: entity, fallback: id)
+        let type = entityType(from: entity.assertion, fallback: String(describing: Swift.type(of: entity)))
+
+        insertIdentityStatement(subject: id, predicate: "rdf:type", object: type)
+        insertIdentityStatement(subject: id, predicate: "rdfs:label", object: label)
+    }
+
+    private func insertIdentityStatement(
+        subject: String,
+        predicate: String,
+        object: String
+    ) {
+        guard !subject.isEmpty, !predicate.isEmpty, !object.isEmpty else { return }
+        let statementID = Statement.contentID(
+            graph: context.graphName,
+            subject: subject,
+            predicate: predicate,
+            object: object
+        )
+        var statement = Statement(
+            graph: context.graphName,
+            subject: subject,
+            predicate: predicate,
+            object: object
+        )
+        statement.id = statementID
+        context.fdbContext.insert(statement)
     }
 
     private struct ResolutionCandidate: Sendable {
@@ -672,6 +706,26 @@ public actor Memory {
     /// Exposed for `@testable` diagnostics.
     internal func _debugFetchAll<T: Persistable>(_ type: T.Type) async throws -> [T] {
         try await context.fdbContext.fetch(type).execute()
+    }
+
+    internal func _debugTriples(
+        graph: String,
+        subject: String = "?subject",
+        predicate: String = "?predicate",
+        object: String = "?object"
+    ) async throws -> [(subject: String, predicate: String, object: String)] {
+        let result = try await context.fdbContext.sparql(graph: graph)
+            .where(subject, predicate, object)
+            .select(["?subject", "?predicate", "?object"])
+            .execute()
+        return result.bindings.compactMap { binding in
+            guard let subject = binding.string("?subject"),
+                  let predicate = binding.string("?predicate"),
+                  let object = binding.string("?object") else {
+                return nil
+            }
+            return (subject, predicate, object)
+        }
     }
 
     /// Runtime introspection for diagnosing polymorphic conformance.

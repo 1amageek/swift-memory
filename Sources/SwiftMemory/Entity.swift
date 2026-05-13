@@ -2,6 +2,7 @@
 // Polymorphic protocol for cross-type entity resolution
 
 import Foundation
+import Database
 import Core
 import Vector
 

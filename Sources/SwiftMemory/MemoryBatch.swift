@@ -12,8 +12,8 @@ public struct MemoryBatch: Sendable {
 
     /// Typed @OWLClass entities to insert.
     /// Must conform to `Entity` so `Memory.store()` can resolve and dedup them
-    /// via embedding similarity. OntologyIndex auto-syncs rdf:type +
-    /// @OWLDataProperty triples on insert.
+    /// via embedding similarity. Store also writes recall identity statements
+    /// for rdf:type and rdfs:label under the resolved entity ID.
     public var entities: [any Persistable & Entity & Sendable]
 
     /// Explicit relationship triples beyond what OntologyIndex generates.

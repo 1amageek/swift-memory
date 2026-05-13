@@ -22,6 +22,14 @@ public struct RecallEngine: Sendable {
 
     private let context: MemoryContext
 
+    private var graphNames: [String] {
+        var names: [String] = []
+        for graph in [context.graphName, "default"] where !names.contains(graph) {
+            names.append(graph)
+        }
+        return names
+    }
+
     public init(context: MemoryContext) {
         self.context = context
     }
@@ -65,18 +73,22 @@ public struct RecallEngine: Sendable {
 
         var activation: [String: (count: Int, paths: [String])] = [:]
 
-        // Step 1: Name recall — find seed entities by label substring match
+        // Step 1: Name recall — find seed entities by label substring match.
+        // Free-form statements are stored in `context.graphName`; typed
+        // @OWLClass entities commonly materialize in the macro default graph.
         var seedIRIs: Set<String> = []
         for cue in cues {
-            let result = try await context.fdbContext.sparql(graph: "memory:default")
-                .where("?entity", "rdfs:label", "?label")
-                .filter("?label", contains: cue)
-                .select(["?entity"])
-                .execute()
+            for graph in graphNames {
+                let result = try await context.fdbContext.sparql(graph: graph)
+                    .where("?entity", "rdfs:label", "?label")
+                    .filter("?label", contains: cue)
+                    .select(["?entity"])
+                    .execute()
 
-            for binding in result.bindings {
-                if let iri = binding.string("?entity") {
-                    seedIRIs.insert(iri)
+                for binding in result.bindings {
+                    if let iri = binding.string("?entity") {
+                        seedIRIs.insert(iri)
+                    }
                 }
             }
         }
@@ -128,58 +140,66 @@ public struct RecallEngine: Sendable {
     ) async throws {
         guard hop <= maxHops else { return }
 
-        // Outgoing: iri → ?rel → ?target
-        let outgoing = try await context.fdbContext.sparql(graph: "memory:default")
-            .where(iri, "?rel", "?target")
-            .select(["?target", "?rel"])
-            .execute()
+        let sourceTerms = try await equivalentTerms(for: iri)
+        for graph in graphNames {
+            for sourceTerm in sourceTerms {
+                // Outgoing: iri → ?rel → ?target
+                let outgoing = try await context.fdbContext.sparql(graph: graph)
+                    .where(sourceTerm, "?rel", "?target")
+                    .select(["?target", "?rel"])
+                    .execute()
 
-        for binding in outgoing.bindings {
-            guard let target = binding.string("?target"),
-                  let rel = binding.string("?rel"),
-                  !Self.excludedPredicates.contains(rel),
-                  !target.hasPrefix("\""),
-                  !visited.contains(target) else { continue }
+                for binding in outgoing.bindings {
+                    guard let target = binding.string("?target"),
+                          let rel = binding.string("?rel"),
+                          !Self.excludedPredicates.contains(rel),
+                          !target.hasPrefix("\"") else { continue }
 
-            activate(&activation, iri: target, path: "\(iri) --[\(rel)]--> \(target)")
+                    let canonicalTarget = try await canonicalTerm(for: target)
+                    guard !visited.contains(canonicalTarget) else { continue }
 
-            // Continue spreading
-            var nextVisited = visited
-            nextVisited.insert(target)
-            try await spread(
-                from: target,
-                seedIRI: seedIRI,
-                hop: hop + 1,
-                maxHops: maxHops,
-                visited: nextVisited,
-                activation: &activation
-            )
-        }
+                    activate(&activation, iri: canonicalTarget, path: "\(sourceTerm) --[\(rel)]--> \(target)")
 
-        // Incoming: ?source → ?rel → iri
-        let incoming = try await context.fdbContext.sparql(graph: "memory:default")
-            .where("?source", "?rel", iri)
-            .select(["?source", "?rel"])
-            .execute()
+                    var nextVisited = visited
+                    nextVisited.insert(canonicalTarget)
+                    try await spread(
+                        from: canonicalTarget,
+                        seedIRI: seedIRI,
+                        hop: hop + 1,
+                        maxHops: maxHops,
+                        visited: nextVisited,
+                        activation: &activation
+                    )
+                }
 
-        for binding in incoming.bindings {
-            guard let source = binding.string("?source"),
-                  let rel = binding.string("?rel"),
-                  !Self.excludedPredicates.contains(rel),
-                  !visited.contains(source) else { continue }
+                // Incoming: ?source → ?rel → iri
+                let incoming = try await context.fdbContext.sparql(graph: graph)
+                    .where("?source", "?rel", sourceTerm)
+                    .select(["?source", "?rel"])
+                    .execute()
 
-            activate(&activation, iri: source, path: "\(source) --[\(rel)]--> \(iri)")
+                for binding in incoming.bindings {
+                    guard let source = binding.string("?source"),
+                          let rel = binding.string("?rel"),
+                          !Self.excludedPredicates.contains(rel) else { continue }
 
-            var nextVisited = visited
-            nextVisited.insert(source)
-            try await spread(
-                from: source,
-                seedIRI: seedIRI,
-                hop: hop + 1,
-                maxHops: maxHops,
-                visited: nextVisited,
-                activation: &activation
-            )
+                    let canonicalSource = try await canonicalTerm(for: source)
+                    guard !visited.contains(canonicalSource) else { continue }
+
+                    activate(&activation, iri: canonicalSource, path: "\(source) --[\(rel)]--> \(sourceTerm)")
+
+                    var nextVisited = visited
+                    nextVisited.insert(canonicalSource)
+                    try await spread(
+                        from: canonicalSource,
+                        seedIRI: seedIRI,
+                        hop: hop + 1,
+                        maxHops: maxHops,
+                        visited: nextVisited,
+                        activation: &activation
+                    )
+                }
+            }
         }
     }
 
@@ -199,20 +219,87 @@ public struct RecallEngine: Sendable {
     // MARK: - Resolution
 
     private func resolveLabel(for iri: String) async throws -> String {
-        let result = try await context.fdbContext.sparql(graph: "memory:default")
-            .where(iri, "rdfs:label", "?label")
-            .select(["?label"])
-            .execute()
-        guard let raw = result.bindings.first?.string("?label") else { return iri }
-        return cleanLiteral(raw)
+        for term in try await equivalentTerms(for: iri) {
+            for graph in graphNames {
+                let result = try await context.fdbContext.sparql(graph: graph)
+                    .where(term, "rdfs:label", "?label")
+                    .select(["?label"])
+                    .execute()
+                if let raw = result.bindings.first?.string("?label") {
+                    return cleanLiteral(raw)
+                }
+            }
+        }
+        return iri
     }
 
     private func resolveType(for iri: String) async throws -> String {
-        let result = try await context.fdbContext.sparql(graph: "memory:default")
-            .where(iri, "rdf:type", "?type")
-            .select(["?type"])
-            .execute()
-        return result.bindings.first?.string("?type") ?? ""
+        for term in try await equivalentTerms(for: iri) {
+            for graph in graphNames {
+                let result = try await context.fdbContext.sparql(graph: graph)
+                    .where(term, "rdf:type", "?type")
+                    .select(["?type"])
+                    .execute()
+                if let type = result.bindings.first?.string("?type") {
+                    return type
+                }
+            }
+        }
+        return ""
+    }
+
+    private func canonicalTerm(for term: String) async throws -> String {
+        if term.hasPrefix("entity:") {
+            return term
+        }
+        let entityIRIs = try await entityIRIs(forStorageID: term)
+        return entityIRIs.sorted().first ?? term
+    }
+
+    private func equivalentTerms(for term: String) async throws -> [String] {
+        var terms = [term]
+        if let storageID = storageID(fromEntityIRI: term) {
+            terms.append(storageID)
+        } else {
+            terms.append(contentsOf: try await entityIRIs(forStorageID: term))
+        }
+        return orderedUnique(terms)
+    }
+
+    private func entityIRIs(forStorageID storageID: String) async throws -> [String] {
+        guard !storageID.isEmpty else { return [] }
+        var matches: [String] = []
+        for graph in graphNames {
+            let result = try await context.fdbContext.sparql(graph: graph)
+                .where("?entity", "rdf:type", "?type")
+                .filter("?entity", contains: "/\(storageID)")
+                .select(["?entity"])
+                .execute()
+            for binding in result.bindings {
+                if let iri = binding.string("?entity") {
+                    matches.append(iri)
+                }
+            }
+        }
+        return orderedUnique(matches)
+    }
+
+    private func storageID(fromEntityIRI iri: String) -> String? {
+        guard iri.hasPrefix("entity:"),
+              let slash = iri.lastIndex(of: "/"),
+              slash < iri.index(before: iri.endIndex) else {
+            return nil
+        }
+        return String(iri[iri.index(after: slash)...])
+    }
+
+    private func orderedUnique(_ values: [String]) -> [String] {
+        var seen: Set<String> = []
+        var output: [String] = []
+        for value in values where seen.insert(value).inserted {
+            output.append(value)
+        }
+        return output
     }
 
     private func cleanLiteral(_ raw: String) -> String {

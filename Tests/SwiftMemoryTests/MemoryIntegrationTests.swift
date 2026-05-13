@@ -100,6 +100,38 @@ struct MemoryIntegrationTests {
         #expect(iris.contains("ex:org/acme"))
     }
 
+    @Test("Recall by typed entity label reaches explicit statements")
+    func recallTypedEntityLabelReachesStatements() async throws {
+        let memory = try await Memory(
+            path: nil,
+            entityTypes: [TestOrganization.self],
+            embeddingProvider: StubEmbeddingProvider()
+        )
+
+        let assertion = ":TSMC a :Organization ."
+        var batch = MemoryBatch()
+        batch.entity(TestOrganization(name: "TSMC", domain: "tsmc.com", assertion: assertion))
+        batch.alias("TSMC", for: assertion)
+        batch.triple("TSMC", "ex:produces", "TSMC N2")
+        try await memory.store(batch)
+
+        let concrete = try await memory._debugFetchAll(TestOrganization.self)
+        let polymorphic = try await memory._debugEntities(witness: TestOrganization.self)
+        #expect(concrete.count == 1)
+        #expect(polymorphic.count == 1)
+
+        let typedTriples = try await memory._debugTriples(graph: "memory:default")
+        #expect(typedTriples.contains { $0.predicate == "rdfs:label" && $0.object == "TSMC" })
+
+        let result = try await memory.recall(keywords: ["TSMC"])
+        let labels = result.entities.map(\.label)
+        let paths = result.entities.flatMap(\.paths)
+
+        #expect(labels.contains("TSMC"))
+        #expect(labels.contains("TSMC N2"))
+        #expect(paths.contains { $0.contains("ex:produces") })
+    }
+
     @Test("Multiple stores accumulate knowledge")
     func multipleStores() async throws {
         let memory = try await Memory(path: nil)
