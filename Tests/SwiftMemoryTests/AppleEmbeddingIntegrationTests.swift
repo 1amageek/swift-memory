@@ -47,14 +47,13 @@ struct AppleEmbeddingIntegrationTests {
         #expect(abs(norm - 1.0) < 1e-3, "embedding must be L2-normalized; got norm=\(norm)")
     }
 
-    @Test("Identical entities deduplicate within one payload via Apple embeddings")
-    func identicalEntitiesDedupWithinPayload() async throws {
+    @Test("Identical entities are inserted separately within one payload")
+    func identicalEntitiesInsertSeparatelyWithinPayload() async throws {
         let provider = try await makeProvider()
         let memory = try await Memory(
             path: nil,
             entityTypes: [AppleTestPerson.self],
-            embeddingProvider: provider,
-            resolutionThreshold: 0.99
+            embeddingProvider: provider
         )
 
         var batch = MemoryBatch()
@@ -63,7 +62,7 @@ struct AppleEmbeddingIntegrationTests {
         try await memory.store(batch)
 
         let count = try await memory._debugEntityCount(witness: AppleTestPerson.self)
-        #expect(count == 1, "identical entities in one payload must collapse to a single record; got \(count)")
+        #expect(count == 2, "store must not deduplicate entities automatically; got \(count)")
     }
 
     @Test("Distinct entities remain separate under Apple embeddings")
@@ -72,8 +71,7 @@ struct AppleEmbeddingIntegrationTests {
         let memory = try await Memory(
             path: nil,
             entityTypes: [AppleTestPerson.self],
-            embeddingProvider: provider,
-            resolutionThreshold: 0.99
+            embeddingProvider: provider
         )
 
         var first = MemoryBatch()

@@ -26,19 +26,31 @@ public struct ResolvedContextStatement: Sendable, Codable, Hashable {
 
     public var direction: Direction
     public var subject: String
+    public var subjectLabel: String
+    public var subjectType: String
     public var predicate: String
     public var object: String
+    public var objectLabel: String
+    public var objectType: String
 
     public init(
         direction: Direction,
         subject: String,
         predicate: String,
-        object: String
+        object: String,
+        subjectLabel: String = "",
+        subjectType: String = "",
+        objectLabel: String = "",
+        objectType: String = ""
     ) {
         self.direction = direction
         self.subject = subject
+        self.subjectLabel = subjectLabel
+        self.subjectType = subjectType
         self.predicate = predicate
         self.object = object
+        self.objectLabel = objectLabel
+        self.objectType = objectType
     }
 }
 

@@ -40,7 +40,7 @@ public enum MemoryError: Error, Sendable {
     case invalidQuery(String)
 
     /// Thrown when `store()` is called with entities but no embedding provider
-    /// has been configured. Entity resolution (dedup via cosine similarity)
-    /// depends on an `EmbeddingProvider`.
+    /// has been configured. Stored entities need embeddings for later vector
+    /// resolve and recall paths.
     case embeddingProviderRequired
 }

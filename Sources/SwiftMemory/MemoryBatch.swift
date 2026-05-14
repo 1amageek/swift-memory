@@ -11,9 +11,9 @@ import Database
 public struct MemoryBatch: Sendable {
 
     /// Typed @OWLClass entities to insert.
-    /// Must conform to `Entity` so `Memory.store()` can resolve and dedup them
-    /// via embedding similarity. Store also writes recall identity statements
-    /// for rdf:type and rdfs:label under the resolved entity ID.
+    /// Must conform to `Entity` so `Memory.store()` can embed and persist them.
+    /// Store also writes recall identity statements for rdf:type and rdfs:label
+    /// under the inserted entity ID.
     public var entities: [any Persistable & Entity & Sendable]
 
     /// Explicit relationship triples beyond what OntologyIndex generates.
@@ -24,7 +24,7 @@ public struct MemoryBatch: Sendable {
     ///
     /// Keys are labels or names that an interpreting agent may use in a
     /// relationship endpoint. Values are entity assertions or explicit IDs.
-    /// Store-time canonicalization rewrites matching endpoints to the resolved
+    /// Store-time canonicalization rewrites matching endpoints to the inserted
     /// entity ID. Non-matching endpoints remain loose graph terms.
     public var aliases: [String: String]
 

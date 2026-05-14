@@ -17,8 +17,8 @@ private let logger = Logger(subsystem: "com.memory", category: "Memory")
 /// - The caller calls `store(batch)` with entities and relationships
 /// - Memory persists them and enables recall via spreading activation
 ///
-/// Entities are deduplicated within a single store payload. Identity against
-/// already-persisted entities is handled by resolve → caller judgment → store.
+/// Entities are inserted as provided. Identity against already-persisted
+/// entities is handled by resolve → caller judgment → store.
 ///
 /// ```swift
 /// let memory = try await Memory(
@@ -38,10 +38,6 @@ private let logger = Logger(subsystem: "com.memory", category: "Memory")
 /// ```
 public actor Memory {
 
-    /// Default cosine-similarity threshold used by `store()` to collapse
-    /// duplicate entities within one payload.
-    public static let defaultResolutionThreshold: Float = 0.95
-
     /// Default cosine-similarity threshold used by `resolve()` to surface
     /// possible matches to the caller.
     public static let defaultResolveThreshold: Float = 0.90
@@ -54,7 +50,6 @@ public actor Memory {
     private let context: MemoryContext
     private let container: DBContainer
     private let recallEngine: RecallEngine
-    private let resolutionThreshold: Float
 
     public nonisolated let ontologyPolicy: any OntologyPolicy
 
@@ -63,11 +58,9 @@ public actor Memory {
         entityTypes: [any Persistable.Type] = [],
         ontologyPolicy: any OntologyPolicy = DefaultOntologyPolicy(),
         graphName: String = "memory:default",
-        embeddingProvider: (any EmbeddingProvider)? = nil,
-        resolutionThreshold: Float = Memory.defaultResolutionThreshold
+        embeddingProvider: (any EmbeddingProvider)? = nil
     ) async throws {
         self.ontologyPolicy = ontologyPolicy
-        self.resolutionThreshold = resolutionThreshold
 
         let allTypes: [any Persistable.Type] = [Given.self, Statement.self, Trace.self] + entityTypes
         let schema = Schema(allTypes, version: Schema.Version(2, 0, 0))
@@ -98,8 +91,8 @@ public actor Memory {
     /// Store Given + Knowledge atomically.
     ///
     /// Given is the raw material. Knowledge is the structured interpretation.
-    /// Entities are deduplicated within the payload; statements are remapped
-    /// to identifiers resolved in the payload. Trace records link each
+    /// Entities are inserted as provided; statements are remapped to identifiers
+    /// created in the payload or registered aliases. Trace records link each
     /// Statement back to its source Given.
     public func store(given: any Memorable, knowledge: some MemoryBatchConvertible) async throws {
         let batch = knowledge.toBatch()
@@ -133,13 +126,13 @@ public actor Memory {
 
         let now = Date()
 
-        // Entity resolution (requires embedding provider when entities exist).
-        var resolutionMap: [String: String] = [:]
+        // Entity insertion (requires embedding provider when entities exist).
+        var entityReferenceMap: [String: String] = [:]
         if !batch.entities.isEmpty {
             guard let provider = context.embeddingProvider else {
                 throw MemoryError.embeddingProviderRequired
             }
-            resolutionMap = try await resolveAndInsertEntities(
+            entityReferenceMap = try await insertEntities(
                 batch.entities,
                 provider: provider
             )
@@ -166,7 +159,7 @@ public actor Memory {
         }
 
         let endpointResolver = StatementEndpointResolver(
-            resolvedEntityReferences: resolutionMap,
+            entityReferences: entityReferenceMap,
             aliases: batch.aliases
         )
 
@@ -206,86 +199,39 @@ public actor Memory {
         )
     }
 
-    // MARK: - Entity Resolution
+    // MARK: - Entity Insertion
 
-    /// Resolve and insert each entity in the batch.
-    ///
-    /// For every input entity, computes a query embedding from its RDF/Turtle
-    /// class assertion and compares it against entities already staged in this
-    /// payload. If the best cosine similarity is at or above the threshold, the
-    /// input is treated as an in-payload duplicate and no new record is
-    /// created. Otherwise the input is inserted with its embedding.
-    ///
-    /// Newly inserted entities are appended to the candidate list so that
-    /// later entities in the same batch resolve against them (self-collision
-    /// handling).
+    /// Insert each entity in the batch and return endpoint mappings for the
+    /// statements that follow. Store-time entity deduplication is deliberately
+    /// not performed here; callers must use `resolve` before `store` when they
+    /// want to reuse an existing entity ID.
     ///
     /// - Returns: Map from input entity IDs/assertions to the resolved entity ID.
-    private func resolveAndInsertEntities(
+    private func insertEntities(
         _ entities: [any Persistable & Entity & Sendable],
         provider: any EmbeddingProvider
     ) async throws -> [String: String] {
-        guard let first = entities.first else { return [:] }
-        return try await _resolveAndInsertEntities(
-            entities,
-            witness: first,
-            provider: provider
-        )
-    }
-
-    private func _resolveAndInsertEntities<E: Persistable & Entity & Sendable>(
-        _ entities: [any Persistable & Entity & Sendable],
-        witness: E,
-        provider: any EmbeddingProvider
-    ) async throws -> [String: String] {
-        var pendingCandidates: [ResolutionCandidate] = []
-        pendingCandidates.reserveCapacity(entities.count)
-
-        var resolutionMap: [String: String] = [:]
-        resolutionMap.reserveCapacity(entities.count)
+        var entityReferenceMap: [String: String] = [:]
+        entityReferenceMap.reserveCapacity(entities.count)
 
         for entity in entities {
             let queryVec = try await provider.embed(entity.assertion)
-            let entityTypeID = ObjectIdentifier(type(of: entity))
             let inputID = String(describing: entity.id)
 
-            let pendingMatch = bestCandidate(
-                in: pendingCandidates,
-                typeID: entityTypeID,
-                embedding: queryVec,
-                threshold: resolutionThreshold
-            )
+            var mutable = entity
+            mutable.embedding = queryVec
+            context.fdbContext.insert(mutable)
 
-            if let match = pendingMatch {
-                resolutionMap[entity.assertion] = match.candidate.id
-                resolutionMap[inputID] = match.candidate.id
-                resolutionMap[match.candidate.id] = match.candidate.id
-                logger.info(
-                    "[resolve] match '\(Self.shortAssertion(entity.assertion))' -> '\(Self.shortAssertion(match.candidate.assertion))' sim=\(match.similarity)"
-                )
-            } else {
-                var mutable = entity
-                mutable.embedding = queryVec
-                context.fdbContext.insert(mutable)
+            let newID = String(describing: mutable.id)
+            insertEntityIdentityStatements(id: newID, entity: mutable)
+            entityReferenceMap[entity.assertion] = newID
+            entityReferenceMap[inputID] = newID
+            entityReferenceMap[newID] = newID
 
-                let newID = String(describing: mutable.id)
-                insertEntityIdentityStatements(id: newID, entity: mutable)
-                resolutionMap[entity.assertion] = newID
-                resolutionMap[inputID] = newID
-                resolutionMap[newID] = newID
-
-                pendingCandidates.append(ResolutionCandidate(
-                    id: newID,
-                    assertion: mutable.assertion,
-                    embedding: queryVec,
-                    typeID: entityTypeID,
-                    persistable: mutable
-                ))
-                logger.info("[resolve] new '\(Self.shortAssertion(entity.assertion))' id=\(newID)")
-            }
+            logger.info("[store] inserted entity '\(Self.shortAssertion(entity.assertion))' id=\(newID)")
         }
 
-        return resolutionMap
+        return entityReferenceMap
     }
 
     private func insertEntityIdentityStatements(
@@ -321,37 +267,27 @@ public actor Memory {
         context.fdbContext.insert(statement)
     }
 
-    private struct ResolutionCandidate: Sendable {
-        let id: String
-        let assertion: String
-        let embedding: [Float]
-        let typeID: ObjectIdentifier
-        let persistable: any Persistable & Entity & Sendable
-    }
-
-    private typealias ResolutionMatch = (candidate: ResolutionCandidate, similarity: Float)
-
     private struct StatementEndpointResolver {
-        let resolvedEntityReferences: [String: String]
+        let entityReferences: [String: String]
         let aliases: [String: String]
 
         func resolve(_ endpoint: String) -> String {
-            if let id = resolvedEntityReferences[endpoint] {
+            if let id = entityReferences[endpoint] {
                 return id
             }
 
             if let aliasTarget = aliases[endpoint],
-               let id = resolvedEntityReferences[aliasTarget] {
+               let id = entityReferences[aliasTarget] {
                 return id
             }
 
             let key = normalized(endpoint)
-            if let id = resolvedEntityReferences.first(where: { normalized($0.key) == key })?.value {
+            if let id = entityReferences.first(where: { normalized($0.key) == key })?.value {
                 return id
             }
 
             if let aliasTarget = aliases.first(where: { normalized($0.key) == key })?.value,
-               let id = resolvedEntityReferences[aliasTarget] {
+               let id = entityReferences[aliasTarget] {
                 return id
             }
 
@@ -391,7 +327,7 @@ public actor Memory {
             .metric(.cosine)
             .executePage()
 
-        var matches: [ResolvedMatch] = []
+        var matches: [(id: String, assertion: String, similarity: Float, label: String, type: String)] = []
         matches.reserveCapacity(min(k, page.results.count))
 
         for result in page.results {
@@ -406,14 +342,12 @@ public actor Memory {
             let id = String(describing: result.item.id)
             let label = entityLabel(from: result.item, fallback: id)
             let type = entityType(from: entity.assertion, fallback: String(describing: Swift.type(of: result.item)))
-            let context = try await resolveOneHopContext(for: id)
-            matches.append(ResolvedMatch(
+            matches.append((
                 id: id,
                 assertion: entity.assertion,
                 similarity: similarity,
                 label: label,
-                type: type,
-                context: context
+                type: type
             ))
         }
 
@@ -421,7 +355,20 @@ public actor Memory {
         if matches.count > k {
             matches = Array(matches.prefix(k))
         }
-        return matches
+        var resolvedMatches: [ResolvedMatch] = []
+        resolvedMatches.reserveCapacity(matches.count)
+        for match in matches {
+            let context = try await resolveOneHopContext(for: match.id)
+            resolvedMatches.append(ResolvedMatch(
+                id: match.id,
+                assertion: match.assertion,
+                similarity: match.similarity,
+                label: match.label,
+                type: match.type,
+                context: context
+            ))
+        }
+        return resolvedMatches
     }
 
     /// Truncate a long assertion for log output.
@@ -461,6 +408,7 @@ public actor Memory {
 
     private func resolveOneHopContext(for iri: String) async throws -> [ResolvedContextStatement] {
         var contextStatements: [ResolvedContextStatement] = []
+        var endpointCache: [String: ResolvedEndpoint] = [:]
 
         let outgoing = try await context.fdbContext.sparql(graph: context.graphName)
             .where(iri, "?predicate", "?object")
@@ -469,11 +417,17 @@ public actor Memory {
         for binding in outgoing.bindings {
             guard let predicate = binding.string("?predicate"),
                   let object = binding.string("?object") else { continue }
+            let subjectEndpoint = try await resolvedEndpoint(for: iri, cache: &endpointCache)
+            let objectEndpoint = try await resolvedEndpoint(for: object, cache: &endpointCache)
             contextStatements.append(ResolvedContextStatement(
                 direction: .outgoing,
                 subject: iri,
                 predicate: predicate,
-                object: cleanLiteral(object)
+                object: objectEndpoint.id,
+                subjectLabel: subjectEndpoint.label,
+                subjectType: subjectEndpoint.type,
+                objectLabel: objectEndpoint.label,
+                objectType: objectEndpoint.type
             ))
         }
 
@@ -484,15 +438,72 @@ public actor Memory {
         for binding in incoming.bindings {
             guard let subject = binding.string("?subject"),
                   let predicate = binding.string("?predicate") else { continue }
+            let subjectEndpoint = try await resolvedEndpoint(for: subject, cache: &endpointCache)
+            let objectEndpoint = try await resolvedEndpoint(for: iri, cache: &endpointCache)
             contextStatements.append(ResolvedContextStatement(
                 direction: .incoming,
                 subject: subject,
                 predicate: predicate,
-                object: iri
+                object: iri,
+                subjectLabel: subjectEndpoint.label,
+                subjectType: subjectEndpoint.type,
+                objectLabel: objectEndpoint.label,
+                objectType: objectEndpoint.type
             ))
         }
 
         return contextStatements
+    }
+
+    private struct ResolvedEndpoint {
+        var id: String
+        var label: String
+        var type: String
+    }
+
+    private func resolvedEndpoint(
+        for rawValue: String,
+        cache: inout [String: ResolvedEndpoint]
+    ) async throws -> ResolvedEndpoint {
+        let cleaned = cleanLiteral(rawValue)
+        if let cached = cache[cleaned] {
+            return cached
+        }
+
+        if rawValue.hasPrefix("\"") {
+            let endpoint = ResolvedEndpoint(id: cleaned, label: cleaned, type: "Literal")
+            cache[cleaned] = endpoint
+            return endpoint
+        }
+
+        let label = try await graphLabel(for: cleaned)
+        let type = try await graphType(for: cleaned)
+        let endpoint = ResolvedEndpoint(
+            id: cleaned,
+            label: label.isEmpty ? cleaned : label,
+            type: type
+        )
+        cache[cleaned] = endpoint
+        return endpoint
+    }
+
+    private func graphLabel(for iri: String) async throws -> String {
+        let result = try await context.fdbContext.sparql(graph: context.graphName)
+            .where(iri, "rdfs:label", "?label")
+            .select(["?label"])
+            .execute()
+        guard let raw = result.bindings.first?.string("?label") else {
+            return ""
+        }
+        return cleanLiteral(raw)
+    }
+
+    private func graphType(for iri: String) async throws -> String {
+        let result = try await context.fdbContext.sparql(graph: context.graphName)
+            .where(iri, "rdf:type", "?type")
+            .select(["?type"])
+            .execute()
+        return result.bindings.first?.string("?type") ?? ""
     }
 
     private func cleanLiteral(_ raw: String) -> String {
@@ -507,36 +518,6 @@ public actor Memory {
             return String(raw.dropFirst().dropLast())
         }
         return raw
-    }
-
-    /// Find the best intra-batch pending match whose concrete Swift type
-    /// matches `typeID`. Mirrors the type-filter applied to persisted
-    /// candidates so that a batch containing mixed Entity subtypes never
-    /// collapses a fresh `Person` into a freshly inserted `Organization`.
-    private func bestCandidate(
-        in candidates: [ResolutionCandidate],
-        typeID: ObjectIdentifier,
-        embedding: [Float],
-        threshold: Float
-    ) -> ResolutionMatch? {
-        var best: ResolutionMatch?
-        for candidate in candidates {
-            guard candidate.typeID == typeID else { continue }
-            guard candidate.embedding.count == embedding.count else { continue }
-            let similarity = Self.cosineSimilarity(embedding, candidate.embedding)
-            guard similarity >= threshold else { continue }
-            best = strongerMatch(best, (candidate, similarity))
-        }
-        return best
-    }
-
-    private func strongerMatch(
-        _ lhs: ResolutionMatch?,
-        _ rhs: ResolutionMatch?
-    ) -> ResolutionMatch? {
-        guard let lhs else { return rhs }
-        guard let rhs else { return lhs }
-        return lhs.similarity >= rhs.similarity ? lhs : rhs
     }
 
     // MARK: - Recall
@@ -567,9 +548,9 @@ public actor Memory {
     /// otherwise mean-pooled assertion embeddings cause cross-class
     /// collisions via shared surface vocabulary.
     ///
-    /// This API is for callers that need to judge possible matches
-    /// before storing. Regular `store()` calls only collapse duplicate entities
-    /// within the current payload; the intended flow is:
+    /// This API is for callers that need to judge possible matches before
+    /// storing. Regular `store()` calls do not perform entity deduplication; the
+    /// intended flow is:
     ///
     /// 1. `resolve([...])` returns candidates with one-hop context
     /// 2. If a candidate truly matches, the caller should reuse its stable ID
@@ -689,15 +670,15 @@ public actor Memory {
     // MARK: - Test Support
 
     /// Count entities stored under the shared polymorphic directory for the
-    /// given witness type. Exposed for `@testable` so dedup tests can assert
+    /// given witness type. Exposed for `@testable` so storage tests can assert
     /// on persisted entity counts.
     internal func _debugEntityCount<T: Persistable & Entity>(witness: T.Type) async throws -> Int {
         try await context.fdbContext.fetchPolymorphic(T.self).count
     }
 
     /// Fetch all entities stored under the shared polymorphic directory for
-    /// the given witness type. Exposed for `@testable` so dedup tests can
-    /// inspect `created`/`updated` timestamps after resolution.
+    /// the given witness type. Exposed for `@testable` so tests can inspect
+    /// stored entity records.
     internal func _debugEntities<T: Persistable & Entity>(witness: T.Type) async throws -> [any Persistable] {
         try await context.fdbContext.fetchPolymorphic(T.self)
     }
@@ -776,9 +757,9 @@ public actor Memory {
         return (components, group.memberTypeNames, indexes)
     }
 
-    /// Directly insert a Persistable (bypassing `resolveAndInsertEntities`) and
+    /// Directly insert a Persistable (bypassing `insertEntities`) and
     /// commit. Used by diagnostic tests to isolate the dual-write code path
-    /// from entity-resolution logic.
+    /// from Memory's normal store logic.
     internal func _debugDirectInsertAndCommit<T: Persistable & Sendable>(_ model: T) async throws {
         context.fdbContext.insert(model)
         try await context.fdbContext.save()

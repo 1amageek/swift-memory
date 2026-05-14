@@ -4,7 +4,7 @@ import Foundation
 import MemoryOntology
 import Database
 
-// Test-only entity type used to exercise embedding-based deduplication.
+// Test-only entity type used to exercise entity storage and resolution.
 // `Entity` conformance is declared in the struct header so Swift emits the
 // Polymorphable conformance record on the concrete type's metadata.
 @Persistable @OWLClass("ex:Person")
@@ -231,7 +231,7 @@ struct MemoryIntegrationTests {
         #expect(iris.contains("ex:person/alice"))
     }
 
-    // MARK: - Entity Embedding Deduplication
+    // MARK: - Entity Storage and Resolution
 
     @Test("Entity vector descriptors remain concrete KeyPaths per member type")
     func entityVectorDescriptorsRemainConcreteKeyPaths() throws {
@@ -325,8 +325,8 @@ struct MemoryIntegrationTests {
         #expect(groupInfo?.indexes.contains("Entity_vector_embedding") == true,
                 "Entity group must include the vector embedding index; indexes=\(groupInfo?.indexes ?? [])")
 
-        // Bypass Memory's resolve pipeline — insert directly via fdbContext to
-        // isolate the dual-write code path from entity-resolution logic.
+        // Bypass Memory's store pipeline — insert directly via fdbContext to
+        // isolate the dual-write code path from normal store logic.
         var alice = TestPerson(name: "Alice", assertion: ":Alice a :Person .")
         alice.embedding = [Float](repeating: 0, count: TestPerson.embeddingDimensions)
         try await memory._debugDirectInsertAndCommit(alice)
@@ -392,8 +392,8 @@ struct MemoryIntegrationTests {
         #expect(count == 2)
     }
 
-    @Test("Duplicate entity in the same batch collapses to a single record")
-    func entityDuplicateWithinBatchCollapses() async throws {
+    @Test("Duplicate entity in the same batch is inserted as a separate record")
+    func entityDuplicateWithinBatchInsertsSeparately() async throws {
         let memory = try await Memory(
             path: nil,
             entityTypes: [TestPerson.self],
@@ -406,7 +406,7 @@ struct MemoryIntegrationTests {
         try await memory.store(batch)
 
         let count = try await memory._debugEntityCount(witness: TestPerson.self)
-        #expect(count == 1)
+        #expect(count == 2)
     }
 
     @Test("Statement can target an existing resolved entity ID without reinserting it")
