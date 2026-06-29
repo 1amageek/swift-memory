@@ -46,22 +46,41 @@ private struct StubEmbeddingProvider: EmbeddingProvider {
     let dimensions: Int = Given.embeddingDimensions
 
     func embed(_ text: String) async throws -> [Float] {
-        var vec = [Float](repeating: 0, count: dimensions)
-        var hash: UInt64 = 1469598103934665603
-        for byte in text.utf8 {
-            hash ^= UInt64(byte)
-            hash &*= 1099511628211
-        }
-        var state = hash | 1
-        for i in 0..<dimensions {
-            state = state &* 6364136223846793005 &+ 1442695040888963407
-            let bits = Float(bitPattern: 0x3F800000 | UInt32(truncatingIfNeeded: state >> 41))
-            vec[i] = bits - 1.5
-        }
-        let norm = vec.reduce(Float(0)) { $0 + $1 * $1 }.squareRoot()
-        guard norm > 0 else { return vec }
-        return vec.map { $0 / norm }
+        deterministicEmbedding(for: text, dimensions: dimensions)
     }
+}
+
+private actor HostEmbeddingBatchRecorder {
+    private var recordedBatches: [[String]] = []
+
+    func embed(_ texts: [String]) -> [[Float]] {
+        recordedBatches.append(texts)
+        return texts.map {
+            deterministicEmbedding(for: $0, dimensions: Given.embeddingDimensions)
+        }
+    }
+
+    func batches() -> [[String]] {
+        recordedBatches
+    }
+}
+
+private func deterministicEmbedding(for text: String, dimensions: Int) -> [Float] {
+    var vec = [Float](repeating: 0, count: dimensions)
+    var hash: UInt64 = 1469598103934665603
+    for byte in text.utf8 {
+        hash ^= UInt64(byte)
+        hash &*= 1099511628211
+    }
+    var state = hash | 1
+    for i in 0..<dimensions {
+        state = state &* 6364136223846793005 &+ 1442695040888963407
+        let bits = Float(bitPattern: 0x3F800000 | UInt32(truncatingIfNeeded: state >> 41))
+        vec[i] = bits - 1.5
+    }
+    let norm = vec.reduce(Float(0)) { $0 + $1 * $1 }.squareRoot()
+    guard norm > 0 else { return vec }
+    return vec.map { $0 / norm }
 }
 
 @Suite("Memory Integration Tests", .serialized)
@@ -130,6 +149,50 @@ struct MemoryIntegrationTests {
         #expect(labels.contains("TSMC"))
         #expect(labels.contains("TSMC N2"))
         #expect(paths.contains { $0.contains("ex:produces") })
+    }
+
+    @Test("Host embedding provider batches entity store requests")
+    func hostEmbeddingProviderBatchesEntityStoreRequests() async throws {
+        let recorder = HostEmbeddingBatchRecorder()
+        let provider = HostEmbeddingProvider(
+            dimensions: Given.embeddingDimensions,
+            embedBatch: { texts in
+                await recorder.embed(texts)
+            }
+        )
+        let memory = try await Memory(
+            path: nil,
+            entityTypes: [TestOrganization.self],
+            embeddingProvider: provider
+        )
+
+        let first = ":Cloudflare a :Organization ."
+        let second = ":WorkersAI a :Organization ."
+        var batch = MemoryBatch()
+        batch.entity(TestOrganization(name: "Cloudflare", domain: "cloudflare.com", assertion: first))
+        batch.entity(TestOrganization(name: "Workers AI", domain: "cloudflare.com", assertion: second))
+        try await memory.store(batch)
+
+        let batches = await recorder.batches()
+        #expect(batches == [[first, second]])
+    }
+
+    @Test("Host embedding provider validates vector dimensions")
+    func hostEmbeddingProviderValidatesVectorDimensions() async throws {
+        let provider = HostEmbeddingProvider(
+            dimensions: Given.embeddingDimensions,
+            embedBatch: { texts in
+                texts.map { _ in [Float](repeating: 1, count: Given.embeddingDimensions - 1) }
+            }
+        )
+
+        do {
+            _ = try await provider.embed("invalid dimension")
+            Issue.record("HostEmbeddingProvider must reject vectors with invalid dimensions")
+        } catch HostEmbeddingProviderError.invalidDimensions(let expected, let actual) {
+            #expect(expected == Given.embeddingDimensions)
+            #expect(actual == Given.embeddingDimensions - 1)
+        }
     }
 
     @Test("Multiple stores accumulate knowledge")
@@ -329,7 +392,7 @@ struct MemoryIntegrationTests {
         // isolate the dual-write code path from normal store logic.
         var alice = TestPerson(name: "Alice", assertion: ":Alice a :Person .")
         alice.embedding = [Float](repeating: 0, count: TestPerson.embeddingDimensions)
-        try await memory._debugDirectInsertAndCommit(alice)
+        try await memory._debugCommittedDirectInsert(alice)
 
         let concrete = try await memory._debugFetchAll(TestPerson.self)
         let rawPolyKeys = try await memory._debugRawPolymorphicKeyCount(identifier: "Entity")

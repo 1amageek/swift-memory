@@ -3,9 +3,6 @@
 
 import Foundation
 import Database
-import os.log
-
-private let logger = Logger(subsystem: "com.memory", category: "RecallEngine")
 
 /// Associative memory recall via spreading activation.
 ///
@@ -93,7 +90,7 @@ public struct RecallEngine: Sendable {
             }
         }
 
-        logger.info("[associate] cues=\(cues) seeds=\(seedIRIs.count)")
+        MemoryLog.info(category: "RecallEngine", "[associate] cues=\(cues) seeds=\(seedIRIs.count)")
         guard !seedIRIs.isEmpty else { return [] }
 
         // Step 2: Spread from each seed
@@ -125,7 +122,7 @@ public struct RecallEngine: Sendable {
 
         // Step 4: Sort by score descending
         results.sort { $0.score > $1.score }
-        logger.info("[associate] results=\(results.count)")
+        MemoryLog.info(category: "RecallEngine", "[associate] results=\(results.count)")
         return Array(results.prefix(limit))
     }
 

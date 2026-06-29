@@ -2,6 +2,8 @@
 // EmbeddingProvider backed by Apple's NLContextualEmbedding.
 
 import Foundation
+
+#if canImport(NaturalLanguage)
 import NaturalLanguage
 
 /// Errors thrown by `AppleEmbeddingProvider`.
@@ -105,3 +107,4 @@ public actor AppleEmbeddingProvider: EmbeddingProvider {
         return mean
     }
 }
+#endif

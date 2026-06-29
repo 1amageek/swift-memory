@@ -4,9 +4,6 @@
 import Foundation
 import Database
 import MemoryOntology
-import os.log
-
-private let logger = Logger(subsystem: "com.memory", category: "Memory")
 
 /// Knowledge persistence and recall system.
 ///
@@ -65,6 +62,16 @@ public actor Memory {
         let allTypes: [any Persistable.Type] = [Given.self, Statement.self, Trace.self] + entityTypes
         let schema = Schema(allTypes, version: Schema.Version(2, 0, 0))
 
+        #if os(WASI)
+        guard path == nil else {
+            throw MemoryError.pathBackedStorageUnavailableOnWASI
+        }
+        self.container = try await DBContainer(
+            for: schema,
+            configuration: DBConfiguration(backend: .custom(InMemoryEngine())),
+            security: .disabled
+        )
+        #else
         if let path {
             self.container = try await DBContainer.sqlite(
                 for: schema, path: path, security: .disabled
@@ -74,6 +81,40 @@ public actor Memory {
                 for: schema, security: .disabled
             )
         }
+        #endif
+
+        let fdbContext = container.newContext()
+        try await fdbContext.ontology.load(ontologyPolicy.buildOntology())
+
+        self.context = MemoryContext(
+            fdbContext: fdbContext,
+            graphName: graphName,
+            embeddingProvider: embeddingProvider
+        )
+        self.recallEngine = RecallEngine(context: context)
+    }
+
+    /// Create Memory with an explicit storage engine.
+    ///
+    /// This initializer is the preferred embedding point for WASM hosts that
+    /// provide their own StorageKit-backed persistence boundary.
+    public init(
+        storageEngine: any StorageEngine,
+        entityTypes: [any Persistable.Type] = [],
+        ontologyPolicy: any OntologyPolicy = DefaultOntologyPolicy(),
+        graphName: String = "memory:default",
+        embeddingProvider: (any EmbeddingProvider)? = nil
+    ) async throws {
+        self.ontologyPolicy = ontologyPolicy
+
+        let allTypes: [any Persistable.Type] = [Given.self, Statement.self, Trace.self] + entityTypes
+        let schema = Schema(allTypes, version: Schema.Version(2, 0, 0))
+
+        self.container = try await DBContainer(
+            for: schema,
+            configuration: DBConfiguration(backend: .custom(storageEngine)),
+            security: .disabled
+        )
 
         let fdbContext = container.newContext()
         try await fdbContext.ontology.load(ontologyPolicy.buildOntology())
@@ -120,7 +161,7 @@ public actor Memory {
 
     private func persist(given: (any Memorable)?, batch: MemoryBatch) async throws {
         guard !batch.entities.isEmpty || !batch.statements.isEmpty else {
-            logger.info("[store] empty knowledge — nothing saved")
+            MemoryLog.info(category: "Memory", "[store] empty knowledge - nothing saved")
             return
         }
 
@@ -145,7 +186,10 @@ public actor Memory {
                 throw MemoryError.embeddingProviderRequired
             }
             let id = ULID().ulidString
-            let embedding = try await provider.embed(given.payloadRef)
+            let embedding = try Self.requireEmbedding(
+                try await provider.embed(given.payloadRef),
+                dimensions: Given.embeddingDimensions
+            )
             var record = Given(
                 modality: given.modality,
                 payloadRef: given.payloadRef,
@@ -194,7 +238,8 @@ public actor Memory {
         }
 
         try await context.fdbContext.save()
-        logger.info(
+        MemoryLog.info(
+            category: "Memory",
             "[store] given=\(givenID ?? "-") entities=\(batch.entities.count) statements=\(batch.statements.count)"
         )
     }
@@ -214,8 +259,16 @@ public actor Memory {
         var entityReferenceMap: [String: String] = [:]
         entityReferenceMap.reserveCapacity(entities.count)
 
-        for entity in entities {
-            let queryVec = try await provider.embed(entity.assertion)
+        let queryVectors = try Self.requireEmbeddingBatch(
+            try await provider.embed(entities.map(\.assertion)),
+            expectedCount: entities.count
+        )
+
+        for (entity, queryVector) in zip(entities, queryVectors) {
+            let queryVec = try Self.requireEmbedding(
+                queryVector,
+                dimensions: Swift.type(of: entity).embeddingDimensions
+            )
             let inputID = String(describing: entity.id)
 
             var mutable = entity
@@ -228,7 +281,7 @@ public actor Memory {
             entityReferenceMap[inputID] = newID
             entityReferenceMap[newID] = newID
 
-            logger.info("[store] inserted entity '\(Self.shortAssertion(entity.assertion))' id=\(newID)")
+            MemoryLog.info(category: "Memory", "[store] inserted entity '\(Self.shortAssertion(entity.assertion))' id=\(newID)")
         }
 
         return entityReferenceMap
@@ -576,7 +629,7 @@ public actor Memory {
         let effectiveThreshold = threshold ?? Self.defaultResolveThreshold
 
         guard let provider = context.embeddingProvider else {
-            logger.info("[resolve] no embedding provider — returning empty candidates")
+            MemoryLog.info(category: "Memory", "[resolve] no embedding provider - returning empty candidates")
             return candidates.map {
                 ResolvedEntity(inputAssertion: $0.assertion)
             }
@@ -589,8 +642,16 @@ public actor Memory {
         var results: [ResolvedEntity] = []
         results.reserveCapacity(candidates.count)
 
-        for candidate in candidates {
-            let queryEmbedding = try await provider.embed(candidate.assertion)
+        let queryEmbeddings = try Self.requireEmbeddingBatch(
+            try await provider.embed(candidates.map(\.assertion)),
+            expectedCount: candidates.count
+        )
+
+        for (candidate, queryVector) in zip(candidates, queryEmbeddings) {
+            let queryEmbedding = try Self.requireEmbedding(
+                queryVector,
+                dimensions: T.embeddingDimensions
+            )
             let matches = try await topPersistedCandidates(
                 witness: T.self,
                 typeID: witnessTypeID,
@@ -606,7 +667,7 @@ public actor Memory {
         }
 
         let withCandidates = results.filter(\.hasCandidates).count
-        logger.info("[resolve] \(candidates.count) inputs -> \(withCandidates) with candidates (threshold=\(effectiveThreshold), limit=\(limit))")
+        MemoryLog.info(category: "Memory", "[resolve] \(candidates.count) inputs -> \(withCandidates) with candidates (threshold=\(effectiveThreshold), limit=\(limit))")
         return results
     }
 
@@ -637,7 +698,7 @@ public actor Memory {
         let effectiveThreshold = threshold ?? Self.defaultResolveThreshold
 
         guard let provider = context.embeddingProvider else {
-            logger.info("[resolve] no embedding provider — returning empty candidates")
+            MemoryLog.info(category: "Memory", "[resolve] no embedding provider - returning empty candidates")
             return entities.map {
                 ResolvedEntity(inputAssertion: $0.assertion)
             }
@@ -646,8 +707,16 @@ public actor Memory {
         var results: [ResolvedEntity] = []
         results.reserveCapacity(entities.count)
 
-        for entity in entities {
-            let queryEmbedding = try await provider.embed(entity.assertion)
+        let queryEmbeddings = try Self.requireEmbeddingBatch(
+            try await provider.embed(entities.map(\.assertion)),
+            expectedCount: entities.count
+        )
+
+        for (entity, queryVector) in zip(entities, queryEmbeddings) {
+            let queryEmbedding = try Self.requireEmbedding(
+                queryVector,
+                dimensions: Swift.type(of: entity).embeddingDimensions
+            )
             let matches = try await topPersistedCandidates(
                 witness: E.self,
                 typeID: ObjectIdentifier(type(of: entity)),
@@ -663,8 +732,34 @@ public actor Memory {
         }
 
         let withCandidates = results.filter(\.hasCandidates).count
-        logger.info("[resolve] \(entities.count) entity inputs -> \(withCandidates) with candidates (threshold=\(effectiveThreshold), limit=\(limit))")
+        MemoryLog.info(category: "Memory", "[resolve] \(entities.count) entity inputs -> \(withCandidates) with candidates (threshold=\(effectiveThreshold), limit=\(limit))")
         return results
+    }
+
+    private static func requireEmbeddingBatch(
+        _ vectors: [[Float]],
+        expectedCount: Int
+    ) throws -> [[Float]] {
+        guard vectors.count == expectedCount else {
+            throw MemoryError.embeddingBatchCountMismatch(
+                expected: expectedCount,
+                actual: vectors.count
+            )
+        }
+        return vectors
+    }
+
+    private static func requireEmbedding(
+        _ vector: [Float],
+        dimensions: Int
+    ) throws -> [Float] {
+        guard vector.count == dimensions else {
+            throw MemoryError.embeddingDimensionMismatch(
+                expected: dimensions,
+                actual: vector.count
+            )
+        }
+        return vector
     }
 
     // MARK: - Test Support
@@ -760,7 +855,7 @@ public actor Memory {
     /// Directly insert a Persistable (bypassing `insertEntities`) and
     /// commit. Used by diagnostic tests to isolate the dual-write code path
     /// from Memory's normal store logic.
-    internal func _debugDirectInsertAndCommit<T: Persistable & Sendable>(_ model: T) async throws {
+    internal func _debugCommittedDirectInsert<T: Persistable & Sendable>(_ model: T) async throws {
         context.fdbContext.insert(model)
         try await context.fdbContext.save()
     }

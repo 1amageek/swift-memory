@@ -43,4 +43,16 @@ public enum MemoryError: Error, Sendable {
     /// has been configured. Stored entities need embeddings for later vector
     /// resolve and recall paths.
     case embeddingProviderRequired
+
+    /// Thrown when an embedding provider returns fewer or more vectors than
+    /// requested by a batch call.
+    case embeddingBatchCountMismatch(expected: Int, actual: Int)
+
+    /// Thrown when an embedding vector cannot be written to the configured
+    /// vector index because its dimension differs from the schema.
+    case embeddingDimensionMismatch(expected: Int, actual: Int)
+
+    /// WASI builds do not include SQLite file storage. Provide a custom
+    /// `StorageEngine` when durable host storage is required.
+    case pathBackedStorageUnavailableOnWASI
 }

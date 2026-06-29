@@ -31,7 +31,7 @@ Concept (external agent: LLM / VLM / rules)
   └─ structures relationships      → Knowledge (RDF statements)
   ↓
 Memory.store(batch)
-  ├─ Given Store   (vector index, 384d cosine)
+  ├─ Given Store   (vector index, 768d cosine)
   └─ Knowledge Store (graph index, triple store)
 
 Memory.recall(query)
@@ -112,15 +112,30 @@ recall(keywords: ["Alice", "auth"])
 
 When an embedding is provided, Memory also searches the Given store by vector similarity — returning the raw materials that are semantically closest to the query.
 
+## Embedding Boundary
+
+`EmbeddingProvider` is an injected boundary. Native apps may provide local ML implementations. Browser and Cloudflare Worker builds should keep model APIs in the host runtime and pass vectors into Swift through `HostEmbeddingProvider`.
+
+```
+Host runtime
+  └─ model API / Workers AI / browser fetch
+       ↓ batch normalized vectors
+Swift WASM
+  └─ Memory.store / Memory.resolve
+```
+
+`Memory` calls the batch embedding API for entity store and resolve paths. Returned vectors are checked against the configured index dimensions before persistence or vector search.
+
 ## Key Types
 
 | Type | Role |
 |------|------|
 | `Memory` (actor) | Public API: `store` / `recall` |
-| `Given` | Sensory material with vector embedding (384d cosine) |
+| `Given` | Sensory material with vector embedding (768d cosine) |
 | `Statement` | RDF triple in the knowledge graph (subject–predicate–object) |
 | `MemoryBatch` | Container for entities + statements, produced by external Concept |
 | `MemoryBatchConvertible` | Protocol for types that convert to `MemoryBatch` |
+| `EmbeddingProvider` | Boundary for native or host-provided embeddings |
 | `RecallQuery` | Query parameters: keywords, embedding, maxHops, limit |
 | `RecallResult` | Result: `entities` (from graph) + `givens` (from vector search) |
 | `RecalledEntity` | Entity with IRI, label, type, convergence score, and traversal paths |
