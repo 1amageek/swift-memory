@@ -8,15 +8,17 @@ import Database
 // Test entity for AppleEmbeddingProvider. Uses the explicit 512-dim
 // `embeddingDimensions` which matches the English NLContextualEmbedding
 // model output.
-@Persistable @OWLClass("ex:Person")
+@Persistable
 struct AppleTestPerson: Entity {
 
     #Directory<AppleTestPerson>("apple", "test", "persons")
 
-    var id: String = ULID().ulidString
+    var id: String = UUID().uuidString
     var name: String
     var assertion: String = ""
-    var embedding: [Float] = []
+    var embedding: Vector = Vector(int8: [])
+
+    var memoryLabel: String? { name }
 }
 
 extension AppleTestPerson {
@@ -47,42 +49,14 @@ struct AppleEmbeddingIntegrationTests {
         #expect(abs(norm - 1.0) < 1e-3, "embedding must be L2-normalized; got norm=\(norm)")
     }
 
-    @Test("Identical entities are inserted separately within one payload")
-    func identicalEntitiesInsertSeparatelyWithinPayload() async throws {
-        let provider = try await makeProvider()
-        let memory = try await Memory(
-            path: nil,
-            entityTypes: [AppleTestPerson.self],
-            embeddingProvider: provider
-        )
-
-        var batch = MemoryBatch()
-        batch.entity(AppleTestPerson(name: "Alice", assertion: ":Alice a :Person ."))
-        batch.entity(AppleTestPerson(name: "Alice", assertion: ":Alice a :Person ."))
-        try await memory.store(batch)
-
-        let count = try await memory._debugEntityCount(witness: AppleTestPerson.self)
-        #expect(count == 2, "store must not deduplicate entities automatically; got \(count)")
-    }
-
-    @Test("Distinct entities remain separate under Apple embeddings")
-    func distinctEntitiesSeparate() async throws {
-        let provider = try await makeProvider()
-        let memory = try await Memory(
-            path: nil,
-            entityTypes: [AppleTestPerson.self],
-            embeddingProvider: provider
-        )
-
-        var first = MemoryBatch()
-        first.entity(AppleTestPerson(name: "Alice", assertion: ":Alice a :Person ."))
-        try await memory.store(first)
-
-        var second = MemoryBatch()
-        second.entity(AppleTestPerson(name: "Bob", assertion: ":Bob a :Person ."))
-        try await memory.store(second)
-
-        let count = try await memory._debugEntityCount(witness: AppleTestPerson.self)
-        #expect(count == 2, "distinct names must remain separate; got \(count)")
+    @Test("Entity registration rejects an incompatible embedding dimension")
+    func entityRegistrationRejectsIncompatibleDimension() throws {
+        do {
+            _ = try MemoryEntityRegistration(AppleTestPerson.self)
+            Issue.record("Registration must reject a 512-dimensional Entity")
+        } catch MemoryError.embeddingDimensionMismatch(let expected, let actual) {
+            #expect(expected == Given.embeddingDimensions)
+            #expect(actual == AppleTestPerson.embeddingDimensions)
+        }
     }
 }

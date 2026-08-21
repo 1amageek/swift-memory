@@ -4,30 +4,107 @@ import Foundation
 import MemoryOntology
 import Database
 
+protocol TestSecurityPolicy: SecurityPolicy {}
+
+extension TestSecurityPolicy {
+    static func permitsRead(
+        of resource: borrowing Self,
+        in context: borrowing AuthorizationContext
+    ) -> Bool { true }
+
+    static func permitsQuery(
+        _ query: borrowing SecurityQuery,
+        in context: borrowing AuthorizationContext
+    ) -> Bool { true }
+
+    static func permitsCreate(
+        _ newResource: borrowing Self,
+        in context: borrowing AuthorizationContext
+    ) -> Bool { true }
+
+    static func permitsUpdate(
+        from resource: borrowing Self,
+        to newResource: borrowing Self,
+        in context: borrowing AuthorizationContext
+    ) -> Bool { true }
+
+    static func permitsDelete(
+        _ resource: borrowing Self,
+        in context: borrowing AuthorizationContext
+    ) -> Bool { true }
+}
+
 // Test-only entity type used to exercise entity storage and resolution.
 // `Entity` conformance is declared in the struct header so Swift emits the
 // Polymorphable conformance record on the concrete type's metadata.
-@Persistable @OWLClass("ex:Person")
-struct TestPerson: Entity {
+@Persistable
+struct TestPerson: Entity, TestSecurityPolicy {
 
     #Directory<TestPerson>("test", "persons")
 
-    var id: String = ULID().ulidString
+    var id: String = UUID().uuidString
     var name: String
     var assertion: String = ""
-    var embedding: [Float] = []
+    var embedding: Vector = Vector(int8: [])
+
+    var memoryLabel: String? { name }
 }
 
-@Persistable @OWLClass("ex:Organization")
-struct TestOrganization: Entity {
+@Persistable
+struct TestOrganization: Entity, TestSecurityPolicy {
 
     #Directory<TestOrganization>("test", "organizations")
 
-    var id: String = ULID().ulidString
+    var id: String = UUID().uuidString
     var name: String
     var domain: String = ""
     var assertion: String = ""
-    var embedding: [Float] = []
+    var embedding: Vector = Vector(int8: [])
+
+    var memoryLabel: String? { name }
+}
+
+protocol AuthenticatedTestSecurityPolicy: SecurityPolicy {}
+
+extension AuthenticatedTestSecurityPolicy {
+    static func permitsRead(
+        of resource: borrowing Self,
+        in context: borrowing AuthorizationContext
+    ) -> Bool { context.isAuthenticated }
+
+    static func permitsQuery(
+        _ query: borrowing SecurityQuery,
+        in context: borrowing AuthorizationContext
+    ) -> Bool { context.isAuthenticated }
+
+    static func permitsCreate(
+        _ newResource: borrowing Self,
+        in context: borrowing AuthorizationContext
+    ) -> Bool { context.isAuthenticated }
+
+    static func permitsUpdate(
+        from resource: borrowing Self,
+        to newResource: borrowing Self,
+        in context: borrowing AuthorizationContext
+    ) -> Bool { context.isAuthenticated }
+
+    static func permitsDelete(
+        _ resource: borrowing Self,
+        in context: borrowing AuthorizationContext
+    ) -> Bool { context.isAuthenticated }
+}
+
+@Persistable
+struct ProtectedTestPerson: Entity, AuthenticatedTestSecurityPolicy {
+
+    #Directory<ProtectedTestPerson>("test", "protected-people")
+
+    var id: String = UUID().uuidString
+    var name: String
+    var assertion: String = ""
+    var embedding: Vector = Vector(int8: [])
+
+    var memoryLabel: String? { name }
 }
 
 extension TestPerson {
@@ -123,7 +200,7 @@ struct MemoryIntegrationTests {
     func recallTypedEntityLabelReachesStatements() async throws {
         let memory = try await Memory(
             path: nil,
-            entityTypes: [TestOrganization.self],
+            entityRegistrations: [try MemoryEntityRegistration(TestOrganization.self)],
             embeddingProvider: StubEmbeddingProvider()
         )
 
@@ -162,7 +239,7 @@ struct MemoryIntegrationTests {
         )
         let memory = try await Memory(
             path: nil,
-            entityTypes: [TestOrganization.self],
+            entityRegistrations: [try MemoryEntityRegistration(TestOrganization.self)],
             embeddingProvider: provider
         )
 
@@ -242,11 +319,95 @@ struct MemoryIntegrationTests {
         try await memory.store(.empty)
     }
 
+    @Test("Entity with an empty identifier fails before database insertion")
+    func emptyEntityIdentifierFailsBeforeInsert() async throws {
+        let memory = try await Memory(
+            path: nil,
+            entityRegistrations: [try MemoryEntityRegistration(TestPerson.self)],
+            embeddingProvider: StubEmbeddingProvider()
+        )
+        var person = TestPerson(name: "Alice", assertion: ":Alice a :Person .")
+        person.id = ""
+        var batch = MemoryBatch()
+        batch.entity(person)
+
+        do {
+            try await memory.store(batch)
+            Issue.record("Memory must reject an empty entity identifier")
+        } catch MemoryError.invalidEntityIdentifier(let type) {
+            #expect(type == TestPerson.persistableType)
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+
+        #expect(try await memory._debugEntityCount(witness: TestPerson.self) == 0)
+    }
+
     @Test("OntologyPolicy validation")
     func policyValidation() async throws {
         let memory = try await Memory(path: nil)
         #expect(memory.ontologyPolicy.validate(typeIRI: "ex:Person"))
         #expect(!memory.ontologyPolicy.validate(typeIRI: "ex:Spaceship"))
+    }
+
+    @Test("Client entity security policy evaluates authorization context")
+    func entitySecurityPolicyEvaluatesAuthorization() async throws {
+        let registration = try MemoryEntityRegistration(ProtectedTestPerson.self)
+        var batch = MemoryBatch()
+        batch.entity(ProtectedTestPerson(name: "Alice", assertion: ":Alice a :Person ."))
+
+        let anonymousMemory = try await Memory(
+            path: nil,
+            entityRegistrations: [registration],
+            embeddingProvider: StubEmbeddingProvider()
+        )
+        do {
+            try await anonymousMemory.store(batch)
+            Issue.record("Anonymous entity creation must be denied")
+        } catch let error as SecurityError {
+            #expect(error.operation == .create)
+            #expect(error.targetType == ProtectedTestPerson.persistableType)
+            #expect(error.userID == nil)
+        }
+
+        let authenticatedMemory = try await Memory(
+            path: nil,
+            entityRegistrations: [registration],
+            embeddingProvider: StubEmbeddingProvider(),
+            authorization: .authenticated(Principal(identifier: "test-user"))
+        )
+        try await authenticatedMemory.store(batch)
+        let stored = try await authenticatedMemory._debugFetchAll(ProtectedTestPerson.self)
+        #expect(stored.count == 1)
+    }
+
+    @Test("SQLite path stores and recalls typed RDF statements")
+    func sqlitePathStoresAndRecallsStatements() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "swift-memory-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: false
+        )
+
+        do {
+            let memory = try await Memory(
+                path: directory.appending(path: "memory.sqlite").path
+            )
+            var batch = MemoryBatch()
+            batch.triple("ex:person/alice", "rdf:type", "ex:Person")
+            batch.triple("ex:person/alice", "rdfs:label", "Alice")
+            try await memory.store(batch)
+
+            let result = try await memory.recall(keywords: ["Alice"])
+            #expect(result.entities.map(\.iri).contains("ex:person/alice"))
+        }
+
+        do {
+            try FileManager.default.removeItem(at: directory)
+        } catch {
+            Issue.record("Failed to remove SQLite test directory: \(error)")
+        }
     }
 
     @Test("Statement deduplication — same triple from different Givens")
@@ -296,41 +457,67 @@ struct MemoryIntegrationTests {
 
     // MARK: - Entity Storage and Resolution
 
-    @Test("Entity vector descriptors remain concrete KeyPaths per member type")
-    func entityVectorDescriptorsRemainConcreteKeyPaths() throws {
-        let schema = Schema(
-            [TestPerson.self, TestOrganization.self],
+    @Test("Entity vector descriptor uses stable field identity")
+    func entityVectorDescriptorUsesStableFieldIdentity() throws {
+        let schema = try Schema(
+            entities: [
+                try TestPerson.schemaEntity,
+                try TestOrganization.schemaEntity,
+            ],
             version: Schema.Version(1, 0, 0)
         )
 
+        let group = try #require(schema.polymorphicGroup(identifier: "Entity"))
+        let declaration = try #require(
+            group.indexes.first { $0.name == "Entity_vector_embedding" }
+        )
         let personDescriptor = try #require(
             schema.polymorphicIndexDescriptors(
                 identifier: "Entity",
                 memberType: TestPerson.self
-            ).first { $0.name == "Entity_vector_embedding" }
+            ).first { $0.name == declaration.name }
         )
         let organizationDescriptor = try #require(
             schema.polymorphicIndexDescriptors(
                 identifier: "Entity",
                 memberType: TestOrganization.self
-            ).first { $0.name == "Entity_vector_embedding" }
+            ).first { $0.name == declaration.name }
+        )
+        let personEmbedding = try #require(
+            schema.entity(for: TestPerson.self)?.fieldMapByName["embedding"]
+        )
+        let organizationEmbedding = try #require(
+            schema.entity(for: TestOrganization.self)?.fieldMapByName["embedding"]
         )
 
-        #expect(personDescriptor.fieldNames == ["embedding"])
-        #expect(organizationDescriptor.fieldNames == ["embedding"])
-        #expect(personDescriptor.kind is VectorIndexKind<TestPerson>)
-        #expect(organizationDescriptor.kind is VectorIndexKind<TestOrganization>)
-        #expect(personDescriptor.keyPaths.first is PartialKeyPath<TestPerson>)
-        #expect(organizationDescriptor.keyPaths.first is PartialKeyPath<TestOrganization>)
-        #expect((personDescriptor.keyPaths.first is PartialKeyPath<TestOrganization>) == false)
-        #expect((organizationDescriptor.keyPaths.first is PartialKeyPath<TestPerson>) == false)
+        #expect(declaration.type == .vector)
+        #expect(declaration.fieldReferences == ["embedding"])
+        #expect(
+            personDescriptor.fieldIdentities == [
+                FieldIdentity(
+                    name: personEmbedding.name,
+                    number: personEmbedding.fieldNumber
+                )
+            ]
+        )
+        #expect(
+            organizationDescriptor.fieldIdentities == [
+                FieldIdentity(
+                    name: organizationEmbedding.name,
+                    number: organizationEmbedding.fieldNumber
+                )
+            ]
+        )
     }
 
     @Test("Entity vector index stores and resolves multiple concrete types")
     func entityVectorIndexStoresAndResolvesMultipleConcreteTypes() async throws {
         let memory = try await Memory(
             path: nil,
-            entityTypes: [TestPerson.self, TestOrganization.self],
+            entityRegistrations: [
+                try MemoryEntityRegistration(TestPerson.self),
+                try MemoryEntityRegistration(TestOrganization.self),
+            ],
             embeddingProvider: StubEmbeddingProvider()
         )
 
@@ -341,10 +528,10 @@ struct MemoryIntegrationTests {
         batch.triple("Acme", "ex:operatesDomain", "acme.example")
         try await memory.store(batch)
 
-        let entities = try await memory._debugEntities(witness: TestPerson.self)
-        #expect(entities.count == 2)
-        #expect(entities.contains { $0 is TestPerson })
-        #expect(entities.contains { $0 is TestOrganization })
+        let persons = try await memory._debugEntities(witness: TestPerson.self)
+        let organizations = try await memory._debugEntities(witness: TestOrganization.self)
+        #expect(persons.count == 1)
+        #expect(organizations.count == 1)
 
         let resolved = try await memory.resolve(
             [ResolveCandidate(assertion: ":Acme a :Organization .")],
@@ -357,13 +544,22 @@ struct MemoryIntegrationTests {
         #expect(first.candidates.first?.type == ":Organization")
         #expect(first.candidates.first?.context.contains { $0.predicate == "ex:operatesDomain" && $0.object == "acme.example" } == true)
         #expect((first.topSimilarity ?? 0) > 0.99)
+
+        let typed = try await memory.resolve([
+            TestOrganization(
+                name: "Acme",
+                domain: "acme.example",
+                assertion: ":Acme a :Organization ."
+            )
+        ])
+        #expect(typed.first?.candidates.first?.label == "Acme")
     }
 
-    @Test("Direct fdbContext.insert writes to polymorphic directory")
+    @Test("Direct database insert writes to polymorphic directory")
     func directInsertDualWrite() async throws {
         let memory = try await Memory(
             path: nil,
-            entityTypes: [TestPerson.self],
+            entityRegistrations: [try MemoryEntityRegistration(TestPerson.self)],
             embeddingProvider: StubEmbeddingProvider()
         )
 
@@ -388,31 +584,26 @@ struct MemoryIntegrationTests {
         #expect(groupInfo?.indexes.contains("Entity_vector_embedding") == true,
                 "Entity group must include the vector embedding index; indexes=\(groupInfo?.indexes ?? [])")
 
-        // Bypass Memory's store pipeline — insert directly via fdbContext to
-        // isolate the dual-write code path from normal store logic.
+        // Bypass Memory's store pipeline and use the public database insert path
+        // to isolate the dual-write code path from normal store logic.
         var alice = TestPerson(name: "Alice", assertion: ":Alice a :Person .")
-        alice.embedding = [Float](repeating: 0, count: TestPerson.embeddingDimensions)
+        alice.embedding = try Vector(
+            float32: [Float](repeating: 0, count: TestPerson.embeddingDimensions)
+        )
         try await memory._debugCommittedDirectInsert(alice)
 
         let concrete = try await memory._debugFetchAll(TestPerson.self)
-        let rawPolyKeys = try await memory._debugRawPolymorphicKeyCount(identifier: "Entity")
-        let probe = try await memory._debugPolymorphicItemsProbe(TestPerson.self)
         let polymorphic = try await memory._debugEntities(witness: TestPerson.self)
         #expect(concrete.count == 1, "concrete fetch should see 1 record")
-        #expect(rawPolyKeys >= 1,
-                "raw scan under _polymorphic_Entity/R must see >=1 key; got \(rawPolyKeys)")
-        let probeMessage = "itemsPrefix=\(probe.itemsPrefixHex) typePrefix=\(probe.typeSubspacePrefixHex) typeCode=\(probe.typeCode) allKeys=\(probe.allKeysHex) typeKeys=\(probe.typeScopedKeysHex)"
-        #expect(probe.typeScopedKeysHex.count >= 1,
-                "typeCode-scoped scan must see >=1 key. \(probeMessage)")
         #expect(polymorphic.count == 1,
-                "polymorphic fetch should see 1 record; raw=\(rawPolyKeys) concrete=\(concrete.count)")
+                "polymorphic fetch should see 1 record; concrete=\(concrete.count)")
     }
 
     @Test("Entity with identical assertion is inserted when stored in separate payloads")
     func entityIdenticalAcrossPayloadsIsCallerControlled() async throws {
         let memory = try await Memory(
             path: nil,
-            entityTypes: [TestPerson.self],
+            entityRegistrations: [try MemoryEntityRegistration(TestPerson.self)],
             embeddingProvider: StubEmbeddingProvider()
         )
 
@@ -439,7 +630,7 @@ struct MemoryIntegrationTests {
     func entityDifferentLabelIsNewRecord() async throws {
         let memory = try await Memory(
             path: nil,
-            entityTypes: [TestPerson.self],
+            entityRegistrations: [try MemoryEntityRegistration(TestPerson.self)],
             embeddingProvider: StubEmbeddingProvider()
         )
 
@@ -459,7 +650,7 @@ struct MemoryIntegrationTests {
     func entityDuplicateWithinBatchInsertsSeparately() async throws {
         let memory = try await Memory(
             path: nil,
-            entityTypes: [TestPerson.self],
+            entityRegistrations: [try MemoryEntityRegistration(TestPerson.self)],
             embeddingProvider: StubEmbeddingProvider()
         )
 
@@ -476,7 +667,7 @@ struct MemoryIntegrationTests {
     func statementCanTargetResolvedEntityID() async throws {
         let memory = try await Memory(
             path: nil,
-            entityTypes: [TestPerson.self],
+            entityRegistrations: [try MemoryEntityRegistration(TestPerson.self)],
             embeddingProvider: StubEmbeddingProvider()
         )
 
@@ -486,7 +677,7 @@ struct MemoryIntegrationTests {
         try await memory.store(initial)
 
         let existing = try await memory._debugEntities(witness: TestPerson.self)
-        let persistedAlice = try #require(existing.first as? TestPerson)
+        let persistedAlice = try #require(existing.first)
 
         var followup = MemoryBatch()
         followup.triple(persistedAlice.id, "rdfs:comment", "loves memory")
@@ -497,9 +688,10 @@ struct MemoryIntegrationTests {
 
         let statements = try await memory._debugFetchAll(Statement.self)
         let remapped = statements.first {
-            $0.predicate == "rdfs:comment" && $0.object == "loves memory"
+            MemoryRDF.value($0.predicate) == "rdfs:comment"
+                && MemoryRDF.value($0.object) == "loves memory"
         }
-        #expect(remapped?.subject == persistedAlice.id)
+        #expect(remapped.flatMap { MemoryRDF.value($0.subject) } == persistedAlice.id)
         #expect(remapped?.id == Statement.contentID(
             graph: "memory:default",
             subject: persistedAlice.id,
@@ -512,25 +704,40 @@ struct MemoryIntegrationTests {
     func statementEndpointAliasesRemapToResolvedEntities() async throws {
         let memory = try await Memory(
             path: nil,
-            entityTypes: [TestOrganization.self],
+            entityRegistrations: [try MemoryEntityRegistration(TestOrganization.self)],
             embeddingProvider: StubEmbeddingProvider()
         )
 
         let assertion = ":TSMC a :Organization ."
+        let partnerAssertion = ":UMC a :Organization ."
         var batch = MemoryBatch()
         batch.entity(TestOrganization(name: "TSMC", domain: "tsmc.com", assertion: assertion))
+        batch.entity(TestOrganization(name: "UMC", domain: "umc.com", assertion: partnerAssertion))
         batch.alias("TSMC", for: assertion)
+        batch.alias("UMC", for: partnerAssertion)
         batch.triple("TSMC", "ex:produces", "TSMC N2")
+        batch.triple("TSMC", "ex:partnersWith", "UMC")
         try await memory.store(batch)
 
         let entities = try await memory._debugEntities(witness: TestOrganization.self)
-        let tsmc = try #require(entities.first as? TestOrganization)
+        let tsmc = try #require(entities.first { $0.name == "TSMC" })
+        let umc = try #require(entities.first { $0.name == "UMC" })
         let statements = try await memory._debugFetchAll(Statement.self)
         let remapped = statements.first {
-            $0.predicate == "ex:produces" && $0.object == "TSMC N2"
+            MemoryRDF.value($0.predicate) == "ex:produces"
+                && MemoryRDF.value($0.object) == "TSMC N2"
         }
+        let relationship = try #require(statements.first {
+            MemoryRDF.value($0.predicate) == "ex:partnersWith"
+        })
 
-        #expect(remapped?.subject == tsmc.id)
+        #expect(remapped.flatMap { MemoryRDF.value($0.subject) } == tsmc.id)
+        #expect(MemoryRDF.value(relationship.object) == umc.id)
+        if case .iri = relationship.object {
+            // Entity relationships must remain graph edges, not RDF literals.
+        } else {
+            Issue.record("Resolved entity objects must be stored as RDF resources")
+        }
     }
 
     @Test("Statement contentID is deterministic")

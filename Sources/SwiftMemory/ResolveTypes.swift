@@ -17,9 +17,9 @@ public struct ResolveCandidate: Sendable {
 }
 
 /// One graph statement adjacent to a resolved candidate.
-public struct ResolvedContextStatement: Sendable, Codable, Hashable {
+public struct ResolvedContextStatement: Sendable, Hashable {
 
-    public enum Direction: String, Sendable, Codable, Hashable {
+    public enum Direction: String, Sendable, Hashable {
         case outgoing
         case incoming
     }
@@ -53,6 +53,11 @@ public struct ResolvedContextStatement: Sendable, Codable, Hashable {
         self.objectType = objectType
     }
 }
+
+#if !hasFeature(Embedded)
+extension ResolvedContextStatement.Direction: Codable {}
+extension ResolvedContextStatement: Codable {}
+#endif
 
 /// A single persisted entity returned by `resolve` as a possible match.
 ///

@@ -46,7 +46,12 @@ RecallResult (givens + entities)
 ```swift
 let memory = try await Memory(
     path: "memory.sqlite",
-    entityTypes: [Person.self, Organization.self]
+    entityRegistrations: [
+        try MemoryEntityRegistration(Person.self),
+        try MemoryEntityRegistration(Organization.self),
+    ],
+    embeddingProvider: embeddingProvider,
+    authorization: authorization
 )
 
 // Store — called by the interpreting agent (Concept)
@@ -131,6 +136,8 @@ Swift WASM
 | Type | Role |
 |------|------|
 | `Memory` (actor) | Public API: `store` / `recall` |
+| `MemoryEntityRegistration` | Statically couples an entity schema, runtime decoder, indexes, and authorization policy |
+| `MemoryEntityRecord` | Captures a concrete entity and its specialized insert operation for heterogeneous batches |
 | `Given` | Sensory material with vector embedding (768d cosine) |
 | `Statement` | RDF triple in the knowledge graph (subject–predicate–object) |
 | `MemoryBatch` | Container for entities + statements, produced by external Concept |
@@ -143,21 +150,93 @@ Swift WASM
 
 ## Entity Types
 
-Entities are `@Persistable @OWLClass` structs defined by the client:
+Client entities are statically compiled `@Persistable` models. `Entity`
+provides the shared polymorphic vector index and refines DatabaseKit's
+`SecurityPolicy`; every registered entity must therefore make explicit read,
+query, create, update, and delete decisions. The shared index currently fixes
+all entity embeddings at 768 dimensions.
+
+String-backed `@Persistable` identifiers automatically satisfy
+`Entity.memoryID`, and `persistableType` supplies `Entity.memoryType`. Entities
+with another identifier representation must provide their own stable string
+mapping. `memoryLabel` is explicit: return the user-facing label to persist as
+`rdfs:label`, or rely on its default `nil` to use `memoryID`.
 
 ```swift
 @Persistable
-@OWLClass("ex:Person")
-struct Person {
+struct Person: Entity {
+    #Directory<Person>("agent", "people")
+
     var id: String = UUID().uuidString
-    @OWLDataProperty("rdfs:label")
-    var name: String = ""
-    @OWLDataProperty("ex:email")
-    var email: String = ""
+    var name: String
+    var assertion: String = ""
+    var embedding: Vector = Vector(int8: [])
+
+    var memoryLabel: String? { name }
+
+    static func permitsRead(
+        of resource: borrowing Person,
+        in context: borrowing AuthorizationContext
+    ) -> Bool { context.isAuthenticated }
+
+    static func permitsQuery(
+        _ query: borrowing SecurityQuery,
+        in context: borrowing AuthorizationContext
+    ) -> Bool { context.isAuthenticated }
+
+    static func permitsCreate(
+        _ newResource: borrowing Person,
+        in context: borrowing AuthorizationContext
+    ) -> Bool { context.isAuthenticated }
+
+    static func permitsUpdate(
+        from resource: borrowing Person,
+        to newResource: borrowing Person,
+        in context: borrowing AuthorizationContext
+    ) -> Bool { context.isAuthenticated }
+
+    static func permitsDelete(
+        _ resource: borrowing Person,
+        in context: borrowing AuthorizationContext
+    ) -> Bool { context.isAuthenticated }
 }
 ```
 
-When inserted via `Memory.store(batch)`, OntologyIndex automatically generates RDF triples (`rdf:type`, `rdfs:label`, data properties) — enabling SPARQL queries and spreading activation.
+`MemoryEntityRegistration(Person.self)` compiles the model's schema, runtime
+decoder, vector-index support, and `SecurityPolicy` handler into one
+registration. `Memory` keeps Database Framework policy evaluation enabled;
+missing policies fail closed.
+
+When an entity is inserted through `Memory.store(batch)`, Memory writes its
+typed row and recall identity statements. Explicit batch statements use
+`RDFTerm`: valid IRIs remain graph resources, plain object text remains a
+literal, and aliases resolved to stored entities remain resource-to-resource
+graph edges.
+
+## Database Framework 26.819 Migration
+
+This release migrates from the runtime-metatype/FDB-oriented API to Database
+Framework's static schema and explicit runtime model.
+
+| Before | Current contract |
+|---|---|
+| `entityTypes: [Person.self]` | `entityRegistrations: [try MemoryEntityRegistration(Person.self)]` |
+| Entity embedding as `[Float]` | Persisted `DatabaseTypes.Vector`; providers still return `[Float]` |
+| Inferred runtime schema | `Schema.Entity` plus `EntityRuntimeRegistration` |
+| Implicit clocks and IDs | Explicit `StorageMonotonicClock`, `WallClock`, and app-generated ULIDs |
+| String graph fields | `RDFGraphName` and `RDFTerm` |
+| Runtime field-name reflection | Explicit `memoryID`, `memoryType`, and `memoryLabel` contracts |
+| Existential entity insertion | `MemoryEntityRecord` captures a concrete specialized insert closure |
+| Missing authorization policy tolerated | `Entity: SecurityPolicy`; missing policy is denied |
+| Duplicate insert behaved like upsert | Content-addressable `Statement` explicitly uses `upsert` |
+
+The package selects the `SQLite`, `VectorIndexes`, and `GraphIndexes` traits.
+Pass `path: nil` for an in-memory database, a file path for SQLite on macOS, or
+use `Memory(storageEngine:...)` to inject a host storage engine. WASI does not
+provide path-backed SQLite through `Memory(path:)`. Standard and Embedded WASM
+use WASI realtime/monotonic clocks; Foundation-only `Data`, `URL`, JSON-byte,
+and `Codable` conveniences are available only where those platform
+capabilities exist.
 
 ## Modules
 

@@ -1,7 +1,9 @@
 // Memory.swift
 // Knowledge persistence and recall
 
+#if canImport(Foundation)
 import Foundation
+#endif
 import Database
 import MemoryOntology
 
@@ -20,7 +22,10 @@ import MemoryOntology
 /// ```swift
 /// let memory = try await Memory(
 ///     path: "memory.sqlite",
-///     entityTypes: [Person.self, Organization.self],
+///     entityRegistrations: [
+///         try MemoryEntityRegistration(Person.self),
+///         try MemoryEntityRegistration(Organization.self),
+///     ],
 ///     embeddingProvider: MLXEmbeddingProvider()
 /// )
 ///
@@ -52,44 +57,64 @@ public actor Memory {
 
     public init(
         path: String?,
-        entityTypes: [any Persistable.Type] = [],
+        entityRegistrations: [MemoryEntityRegistration] = [],
         ontologyPolicy: any OntologyPolicy = DefaultOntologyPolicy(),
         graphName: String = "memory:default",
-        embeddingProvider: (any EmbeddingProvider)? = nil
+        embeddingProvider: (any EmbeddingProvider)? = nil,
+        monotonicClock: any StorageMonotonicClock = MemoryMonotonicClock(),
+        wallClock: any WallClock = MemoryWallClock(),
+        authorization: AuthorizationContext = .anonymous
     ) async throws {
         self.ontologyPolicy = ontologyPolicy
 
-        let allTypes: [any Persistable.Type] = [Given.self, Statement.self, Trace.self] + entityTypes
-        let schema = Schema(allTypes, version: Schema.Version(2, 0, 0))
+        let (schema, runtimeConfiguration) = try Self.databaseDefinition(
+            entityRegistrations: entityRegistrations
+        )
+        let graph = try MemoryRDF.graphName(graphName)
 
         #if os(WASI)
         guard path == nil else {
             throw MemoryError.pathBackedStorageUnavailableOnWASI
         }
-        self.container = try await DBContainer(
+        self.container = try await DBContainer.open(
             for: schema,
-            configuration: DBConfiguration(backend: .custom(InMemoryEngine())),
-            security: .disabled
+            configuration: DBConfiguration(
+                storageEngine: InMemoryEngine(),
+                monotonicClock: monotonicClock,
+                wallClock: wallClock
+            ),
+            runtimeConfiguration: runtimeConfiguration
         )
         #else
         if let path {
             self.container = try await DBContainer.sqlite(
-                for: schema, path: path, security: .disabled
+                for: schema,
+                path: path,
+                monotonicClock: monotonicClock,
+                wallClock: wallClock,
+                runtimeConfiguration: runtimeConfiguration
             )
         } else {
             self.container = try await DBContainer.inMemory(
-                for: schema, security: .disabled
+                for: schema,
+                monotonicClock: monotonicClock,
+                wallClock: wallClock,
+                runtimeConfiguration: runtimeConfiguration
             )
         }
         #endif
 
-        let fdbContext = container.newContext()
-        try await fdbContext.ontology.load(ontologyPolicy.buildOntology())
+        let databaseContext = container.newContext(authorization: authorization)
+        try await databaseContext.ontology.load(
+            ontologyPolicy.buildOntology(),
+            at: wallClock.now
+        )
 
         self.context = MemoryContext(
-            fdbContext: fdbContext,
-            graphName: graphName,
-            embeddingProvider: embeddingProvider
+            databaseContext: databaseContext,
+            graphName: graph,
+            embeddingProvider: embeddingProvider,
+            wallClock: wallClock
         )
         self.recallEngine = RecallEngine(context: context)
     }
@@ -100,31 +125,72 @@ public actor Memory {
     /// provide their own StorageKit-backed persistence boundary.
     public init(
         storageEngine: any StorageEngine,
-        entityTypes: [any Persistable.Type] = [],
+        entityRegistrations: [MemoryEntityRegistration] = [],
         ontologyPolicy: any OntologyPolicy = DefaultOntologyPolicy(),
         graphName: String = "memory:default",
-        embeddingProvider: (any EmbeddingProvider)? = nil
+        embeddingProvider: (any EmbeddingProvider)? = nil,
+        monotonicClock: any StorageMonotonicClock = MemoryMonotonicClock(),
+        wallClock: any WallClock = MemoryWallClock(),
+        authorization: AuthorizationContext = .anonymous
     ) async throws {
         self.ontologyPolicy = ontologyPolicy
 
-        let allTypes: [any Persistable.Type] = [Given.self, Statement.self, Trace.self] + entityTypes
-        let schema = Schema(allTypes, version: Schema.Version(2, 0, 0))
+        let (schema, runtimeConfiguration) = try Self.databaseDefinition(
+            entityRegistrations: entityRegistrations
+        )
+        let graph = try MemoryRDF.graphName(graphName)
 
-        self.container = try await DBContainer(
+        self.container = try await DBContainer.open(
             for: schema,
-            configuration: DBConfiguration(backend: .custom(storageEngine)),
-            security: .disabled
+            configuration: DBConfiguration(
+                storageEngine: storageEngine,
+                monotonicClock: monotonicClock,
+                wallClock: wallClock
+            ),
+            runtimeConfiguration: runtimeConfiguration
         )
 
-        let fdbContext = container.newContext()
-        try await fdbContext.ontology.load(ontologyPolicy.buildOntology())
+        let databaseContext = container.newContext(authorization: authorization)
+        try await databaseContext.ontology.load(
+            ontologyPolicy.buildOntology(),
+            at: wallClock.now
+        )
 
         self.context = MemoryContext(
-            fdbContext: fdbContext,
-            graphName: graphName,
-            embeddingProvider: embeddingProvider
+            databaseContext: databaseContext,
+            graphName: graph,
+            embeddingProvider: embeddingProvider,
+            wallClock: wallClock
         )
         self.recallEngine = RecallEngine(context: context)
+    }
+
+    private static func databaseDefinition(
+        entityRegistrations: [MemoryEntityRegistration]
+    ) throws -> (Schema, DatabaseRuntimeConfiguration) {
+        let internalRuntimes = [
+            try DatabaseFrameworkRuntime.entity(Given.self),
+            try DatabaseFrameworkRuntime.entity(Statement.self),
+            try DatabaseFrameworkRuntime.entity(Trace.self),
+        ]
+        let runtimes = internalRuntimes + entityRegistrations.map { $0.runtime }
+        let schema = try Schema(
+            entities: runtimes.map { $0.entity },
+            version: Schema.Version(3, 0, 0)
+        )
+        let runtimeConfiguration = try DatabaseFrameworkRuntime.configuration(
+            executionIdentity: DatabaseExecutionRuntimeIdentity(
+                identifier: "swift-memory",
+                revision: 1
+            ),
+            entityRuntimes: runtimes,
+            authorizationPolicies: [
+                AuthorizationPolicyHandler(Given.self),
+                AuthorizationPolicyHandler(Statement.self),
+                AuthorizationPolicyHandler(Trace.self),
+            ] + entityRegistrations.map { $0.authorizationPolicy }
+        )
+        return (schema, runtimeConfiguration)
     }
 
     // MARK: - Store
@@ -135,11 +201,12 @@ public actor Memory {
     /// Entities are inserted as provided; statements are remapped to identifiers
     /// created in the payload or registered aliases. Trace records link each
     /// Statement back to its source Given.
-    public func store(given: any Memorable, knowledge: some MemoryBatchConvertible) async throws {
+    public func store(given: any Memorable, knowledge: any MemoryBatchConvertible) async throws {
         let batch = knowledge.toBatch()
         try await persist(given: given, batch: batch)
     }
 
+    #if canImport(Foundation)
     /// Store Given + Knowledge from raw JSON data and a decode closure.
     /// Used by transport adapters where knowledge arrives as JSON bytes.
     public func store(
@@ -150,6 +217,7 @@ public actor Memory {
         let batch = try decode(knowledgeData)
         try await persist(given: given, batch: batch)
     }
+    #endif
 
     /// Store a batch directly (without Given).
     /// No Trace records are created because there is no Given to link from.
@@ -165,7 +233,8 @@ public actor Memory {
             return
         }
 
-        let now = Date()
+        let now = context.wallClock.now
+        let graphValue = MemoryRDF.graphValue(context.graphName)
 
         // Entity insertion (requires embedding provider when entities exist).
         var entityReferenceMap: [String: String] = [:]
@@ -185,20 +254,20 @@ public actor Memory {
             guard let provider = context.embeddingProvider else {
                 throw MemoryError.embeddingProviderRequired
             }
-            let id = ULID().ulidString
+            let id = try MemoryIdentifier.ulid(at: now)
             let embedding = try Self.requireEmbedding(
                 try await provider.embed(given.payloadRef),
                 dimensions: Given.embeddingDimensions
             )
-            var record = Given(
+            let record = Given(
+                id: id,
                 modality: given.modality,
                 payloadRef: given.payloadRef,
-                embedding: embedding,
+                embedding: try Vector(float32: embedding),
                 timestamp: now,
                 source: "given"
             )
-            record.id = id
-            context.fdbContext.insert(record)
+            try context.databaseContext.insert(record)
             givenID = id
         }
 
@@ -214,30 +283,30 @@ public actor Memory {
             let subject = endpointResolver.resolve(record.subject)
             let object = endpointResolver.resolve(record.object)
             let statementID = Statement.contentID(
-                graph: context.graphName,
-                subject: subject,
+                graph: graphValue,
+                subject: subject.value,
                 predicate: record.predicate,
-                object: object
+                object: object.value
             )
             var statement = Statement(
-                graph: context.graphName,
-                subject: subject,
-                predicate: record.predicate,
-                object: object
+                graph: MemoryRDF.graphTerm(context.graphName),
+                subject: try MemoryRDF.resourceTerm(subject.value),
+                predicate: try MemoryRDF.predicateTerm(record.predicate),
+                object: try object.rdfTerm
             )
             statement.id = statementID
-            context.fdbContext.insert(statement)
+            try context.databaseContext.upsert(statement)
 
             if let givenID {
                 var trace = Trace()
                 trace.id = "\(givenID)|\(statementID)"
                 trace.givenID = givenID
                 trace.statementID = statementID
-                context.fdbContext.insert(trace)
+                try context.databaseContext.insert(trace)
             }
         }
 
-        try await context.fdbContext.save()
+        try await context.databaseContext.save()
         MemoryLog.info(
             category: "Memory",
             "[store] given=\(givenID ?? "-") entities=\(batch.entities.count) statements=\(batch.statements.count)"
@@ -253,30 +322,34 @@ public actor Memory {
     ///
     /// - Returns: Map from input entity IDs/assertions to the resolved entity ID.
     private func insertEntities(
-        _ entities: [any Persistable & Entity & Sendable],
+        _ entities: [MemoryEntityRecord],
         provider: any EmbeddingProvider
     ) async throws -> [String: String] {
         var entityReferenceMap: [String: String] = [:]
         entityReferenceMap.reserveCapacity(entities.count)
 
         let queryVectors = try Self.requireEmbeddingBatch(
-            try await provider.embed(entities.map(\.assertion)),
+            try await provider.embed(entities.map { $0.assertion }),
             expectedCount: entities.count
         )
 
         for (entity, queryVector) in zip(entities, queryVectors) {
+            guard !entity.id.isEmpty else {
+                throw MemoryError.invalidEntityIdentifier(type: entity.type)
+            }
             let queryVec = try Self.requireEmbedding(
                 queryVector,
-                dimensions: Swift.type(of: entity).embeddingDimensions
+                dimensions: entity.embeddingDimensions
             )
-            let inputID = String(describing: entity.id)
+            let inputID = entity.id
 
-            var mutable = entity
-            mutable.embedding = queryVec
-            context.fdbContext.insert(mutable)
+            try entity.insert(
+                embedding: try Vector(float32: queryVec),
+                into: context.databaseContext
+            )
 
-            let newID = String(describing: mutable.id)
-            insertEntityIdentityStatements(id: newID, entity: mutable)
+            let newID = entity.id
+            try insertEntityIdentityStatements(id: newID, entity: entity)
             entityReferenceMap[entity.assertion] = newID
             entityReferenceMap[inputID] = newID
             entityReferenceMap[newID] = newID
@@ -289,84 +362,139 @@ public actor Memory {
 
     private func insertEntityIdentityStatements(
         id: String,
-        entity: any Entity
-    ) {
-        let label = entityLabel(from: entity, fallback: id)
-        let type = entityType(from: entity.assertion, fallback: String(describing: Swift.type(of: entity)))
+        entity: MemoryEntityRecord
+    ) throws {
+        let label = entity.label.flatMap { $0.isEmpty ? nil : $0 } ?? id
+        let type = entityType(
+            from: entity.assertion,
+            fallback: "memory:type/\(entity.type)"
+        )
 
-        insertIdentityStatement(subject: id, predicate: "rdf:type", object: type)
-        insertIdentityStatement(subject: id, predicate: "rdfs:label", object: label)
+        try insertIdentityStatement(
+            subject: id,
+            predicate: "rdf:type",
+            object: try MemoryRDF.resourceTerm(type)
+        )
+        try insertIdentityStatement(
+            subject: id,
+            predicate: "rdfs:label",
+            object: .string(label)
+        )
     }
 
     private func insertIdentityStatement(
         subject: String,
         predicate: String,
-        object: String
-    ) {
-        guard !subject.isEmpty, !predicate.isEmpty, !object.isEmpty else { return }
+        object: RDFTerm
+    ) throws {
+        guard !subject.isEmpty else {
+            throw MemoryError.invalidRDFTerm(position: "subject", value: subject)
+        }
+        guard !predicate.isEmpty else {
+            throw MemoryError.invalidRDFTerm(position: "predicate", value: predicate)
+        }
+        let graphValue = MemoryRDF.graphValue(context.graphName)
+        guard let objectValue = MemoryRDF.value(object) else {
+            throw MemoryError.invalidRDFTerm(
+                position: "object",
+                value: object.description
+            )
+        }
         let statementID = Statement.contentID(
-            graph: context.graphName,
+            graph: graphValue,
             subject: subject,
             predicate: predicate,
-            object: object
+            object: objectValue
         )
         var statement = Statement(
-            graph: context.graphName,
-            subject: subject,
-            predicate: predicate,
+            graph: MemoryRDF.graphTerm(context.graphName),
+            subject: try MemoryRDF.resourceTerm(subject),
+            predicate: try MemoryRDF.predicateTerm(predicate),
             object: object
         )
         statement.id = statementID
-        context.fdbContext.insert(statement)
+        try context.databaseContext.insert(statement)
     }
 
     private struct StatementEndpointResolver {
         let entityReferences: [String: String]
         let aliases: [String: String]
 
-        func resolve(_ endpoint: String) -> String {
+        func resolve(_ endpoint: String) -> ResolvedStatementEndpoint {
             if let id = entityReferences[endpoint] {
-                return id
+                return .entityReference(id)
             }
 
             if let aliasTarget = aliases[endpoint],
                let id = entityReferences[aliasTarget] {
-                return id
+                return .entityReference(id)
             }
 
             let key = normalized(endpoint)
             if let id = entityReferences.first(where: { normalized($0.key) == key })?.value {
-                return id
+                return .entityReference(id)
             }
 
             if let aliasTarget = aliases.first(where: { normalized($0.key) == key })?.value,
                let id = entityReferences[aliasTarget] {
-                return id
+                return .entityReference(id)
             }
 
-            return endpoint
+            return .loose(endpoint)
         }
 
         private func normalized(_ value: String) -> String {
-            value
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .folding(
-                    options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive],
-                    locale: .current
-                )
+            var lowerBound = value.startIndex
+            var upperBound = value.endIndex
+
+            while lowerBound < upperBound, Self.isEndpointWhitespace(value[lowerBound]) {
+                lowerBound = value.index(after: lowerBound)
+            }
+            while lowerBound < upperBound {
+                let previous = value.index(before: upperBound)
+                guard Self.isEndpointWhitespace(value[previous]) else { break }
+                upperBound = previous
+            }
+
+            return value[lowerBound..<upperBound].lowercased()
+        }
+
+        private static func isEndpointWhitespace(_ character: Character) -> Bool {
+            character == " " || character == "\n" || character == "\r" || character == "\t"
         }
     }
 
-    /// Return up to `k` persisted `E` entities (runtime type == `typeID`)
+    private struct ResolvedStatementEndpoint {
+        let value: String
+        let isEntityReference: Bool
+
+        static func entityReference(_ value: String) -> Self {
+            Self(value: value, isEntityReference: true)
+        }
+
+        static func loose(_ value: String) -> Self {
+            Self(value: value, isEntityReference: false)
+        }
+
+        var rdfTerm: RDFTerm {
+            get throws {
+                if isEntityReference {
+                    return try MemoryRDF.resourceTerm(value)
+                }
+                return try MemoryRDF.objectTerm(value)
+            }
+        }
+    }
+
+    /// Return up to `k` persisted `E` entities.
     /// whose cosine similarity to `embedding` clears `threshold`, sorted by
     /// similarity descending.
     ///
     /// Used by the public `resolve` API to surface possible matches for
     /// external caller judgment. Store-time persistence does not call this path
     /// for already-persisted entities.
-    private func topPersistedCandidates<E: Persistable & Entity & Sendable>(
+    private final func topPersistedCandidates<E: Persistable & Entity & Sendable>(
         witness: E.Type,
-        typeID: ObjectIdentifier,
         embedding: [Float],
         threshold: Float,
         k: Int,
@@ -374,8 +502,8 @@ public actor Memory {
     ) async throws -> [ResolvedMatch] {
         guard k > 0 else { return [] }
 
-        let page = try await context.fdbContext.findPolymorphic(E.self)
-            .vector(\.embedding, dimensions: E.embeddingDimensions)
+        let page = try await context.databaseContext.findPolymorphic(E.self)
+            .vector(try E.persistedEmbeddingField(), dimensions: E.embeddingDimensions)
             .query(embedding, k: searchLimit)
             .metric(.cosine)
             .executePage()
@@ -384,17 +512,19 @@ public actor Memory {
         matches.reserveCapacity(min(k, page.results.count))
 
         for result in page.results {
-            guard result.item is any Persistable & Entity & Sendable else { continue }
-            guard ObjectIdentifier(type(of: result.item)) == typeID else { continue }
-            guard let distance = result.annotations["distance"]?.doubleValue else {
+            guard result.typeName == E.persistableType else { continue }
+            guard let distance = result.annotations["distance"]?.float64Value else {
                 throw MemoryError.invalidQuery("polymorphic vector result is missing distance annotation")
             }
             let similarity = 1 - Float(distance)
             guard similarity >= threshold else { continue }
-            guard let entity = result.item as? any Entity else { continue }
-            let id = String(describing: result.item.id)
-            let label = entityLabel(from: result.item, fallback: id)
-            let type = entityType(from: entity.assertion, fallback: String(describing: Swift.type(of: result.item)))
+            let entity = try result.decode(as: E.self)
+            let id = entity.memoryID
+            let label = entity.memoryLabel ?? id
+            let type = entityType(
+                from: entity.assertion,
+                fallback: "memory:type/\(E.persistableType)"
+            )
             matches.append((
                 id: id,
                 assertion: entity.assertion,
@@ -430,27 +560,11 @@ public actor Memory {
         return String(assertion.prefix(limit)) + "…"
     }
 
-    private func entityLabel(from item: Any, fallback: String) -> String {
-        let mirror = Mirror(reflecting: item)
-        for key in ["name", "title", "label"] {
-            if let value = stringProperty(named: key, in: mirror), !value.isEmpty {
-                return value
-            }
-        }
-        return fallback
-    }
-
-    private func stringProperty(named name: String, in mirror: Mirror) -> String? {
-        for child in mirror.children where child.label == name {
-            return child.value as? String
-        }
-        return nil
-    }
-
     private func entityType(from assertion: String, fallback: String) -> String {
         let tokens = assertion
-            .replacingOccurrences(of: ".", with: " ")
-            .split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" })
+            .split(whereSeparator: {
+                $0 == "." || $0 == " " || $0 == "\n" || $0 == "\r" || $0 == "\t"
+            })
             .map(String.init)
         guard let predicateIndex = tokens.firstIndex(of: "a"),
               tokens.indices.contains(tokens.index(after: predicateIndex)) else {
@@ -463,13 +577,17 @@ public actor Memory {
         var contextStatements: [ResolvedContextStatement] = []
         var endpointCache: [String: ResolvedEndpoint] = [:]
 
-        let outgoing = try await context.fdbContext.sparql(graph: context.graphName)
-            .where(iri, "?predicate", "?object")
+        let outgoing = try await context.databaseContext.sparql(namedGraph: context.graphName)
+            .where(
+                try MemoryRDF.executionResource(iri),
+                .variable("?predicate"),
+                .variable("?object")
+            )
             .select(["?predicate", "?object"])
             .execute()
         for binding in outgoing.bindings {
-            guard let predicate = binding.string("?predicate"),
-                  let object = binding.string("?object") else { continue }
+            guard let predicate = MemoryRDF.resourceValue(binding, variable: "?predicate"),
+                  let object = MemoryRDF.value(binding, variable: "?object") else { continue }
             let subjectEndpoint = try await resolvedEndpoint(for: iri, cache: &endpointCache)
             let objectEndpoint = try await resolvedEndpoint(for: object, cache: &endpointCache)
             contextStatements.append(ResolvedContextStatement(
@@ -484,13 +602,17 @@ public actor Memory {
             ))
         }
 
-        let incoming = try await context.fdbContext.sparql(graph: context.graphName)
-            .where("?subject", "?predicate", iri)
+        let incoming = try await context.databaseContext.sparql(namedGraph: context.graphName)
+            .where(
+                .variable("?subject"),
+                .variable("?predicate"),
+                try MemoryRDF.executionResource(iri)
+            )
             .select(["?subject", "?predicate"])
             .execute()
         for binding in incoming.bindings {
-            guard let subject = binding.string("?subject"),
-                  let predicate = binding.string("?predicate") else { continue }
+            guard let subject = MemoryRDF.resourceValue(binding, variable: "?subject"),
+                  let predicate = MemoryRDF.resourceValue(binding, variable: "?predicate") else { continue }
             let subjectEndpoint = try await resolvedEndpoint(for: subject, cache: &endpointCache)
             let objectEndpoint = try await resolvedEndpoint(for: iri, cache: &endpointCache)
             contextStatements.append(ResolvedContextStatement(
@@ -541,36 +663,39 @@ public actor Memory {
     }
 
     private func graphLabel(for iri: String) async throws -> String {
-        let result = try await context.fdbContext.sparql(graph: context.graphName)
-            .where(iri, "rdfs:label", "?label")
+        let result = try await context.databaseContext.sparql(namedGraph: context.graphName)
+            .where(
+                try MemoryRDF.executionResource(iri),
+                try MemoryRDF.executionPredicate("rdfs:label"),
+                .variable("?label")
+            )
             .select(["?label"])
             .execute()
-        guard let raw = result.bindings.first?.string("?label") else {
+        guard let first = result.bindings.first,
+              let raw = MemoryRDF.value(first, variable: "?label") else {
             return ""
         }
         return cleanLiteral(raw)
     }
 
     private func graphType(for iri: String) async throws -> String {
-        let result = try await context.fdbContext.sparql(graph: context.graphName)
-            .where(iri, "rdf:type", "?type")
+        let result = try await context.databaseContext.sparql(namedGraph: context.graphName)
+            .where(
+                try MemoryRDF.executionResource(iri),
+                try MemoryRDF.executionPredicate("rdf:type"),
+                .variable("?type")
+            )
             .select(["?type"])
             .execute()
-        return result.bindings.first?.string("?type") ?? ""
+        guard let first = result.bindings.first else { return "" }
+        return MemoryRDF.resourceValue(first, variable: "?type") ?? ""
     }
 
     private func cleanLiteral(_ raw: String) -> String {
-        guard raw.hasPrefix("\"") else { return raw }
-        if let range = raw.range(of: "\"^^", options: .backwards) {
-            return String(raw[raw.index(after: raw.startIndex)..<range.lowerBound])
-        }
-        if let range = raw.range(of: "\"@", options: .backwards) {
-            return String(raw[raw.index(after: raw.startIndex)..<range.lowerBound])
-        }
-        if raw.hasSuffix("\"") {
-            return String(raw.dropFirst().dropLast())
-        }
-        return raw
+        guard raw.hasPrefix("\""),
+              let closingQuote = raw.lastIndex(of: "\""),
+              closingQuote > raw.startIndex else { return raw }
+        return String(raw[raw.index(after: raw.startIndex)..<closingQuote])
     }
 
     // MARK: - Recall
@@ -620,7 +745,7 @@ public actor Memory {
     ///     `defaultResolveLimit`.
     /// - Returns: One `ResolvedEntity` per input, each with a (possibly
     ///   empty) list of matching candidates sorted by similarity descending.
-    public func resolve<T: Persistable & Entity>(
+    public final func resolve<T: Persistable & Entity>(
         _ candidates: [ResolveCandidate],
         witness: T.Type,
         threshold: Float? = nil,
@@ -637,13 +762,11 @@ public actor Memory {
 
         guard !candidates.isEmpty else { return [] }
 
-        let witnessTypeID = ObjectIdentifier(T.self)
-
         var results: [ResolvedEntity] = []
         results.reserveCapacity(candidates.count)
 
         let queryEmbeddings = try Self.requireEmbeddingBatch(
-            try await provider.embed(candidates.map(\.assertion)),
+            try await provider.embed(candidates.map { $0.assertion }),
             expectedCount: candidates.count
         )
 
@@ -654,7 +777,6 @@ public actor Memory {
             )
             let matches = try await topPersistedCandidates(
                 witness: T.self,
-                typeID: witnessTypeID,
                 embedding: queryEmbedding,
                 threshold: effectiveThreshold,
                 k: limit,
@@ -666,35 +788,55 @@ public actor Memory {
             ))
         }
 
-        let withCandidates = results.filter(\.hasCandidates).count
+        let withCandidates = results.filter { $0.hasCandidates }.count
         MemoryLog.info(category: "Memory", "[resolve] \(candidates.count) inputs -> \(withCandidates) with candidates (threshold=\(effectiveThreshold), limit=\(limit))")
         return results
     }
 
-    /// Resolve concrete entity instances against existing knowledge without
-    /// inserting. This is the preferred pre-store path for callers that already
-    /// hold typed entity instances because it uses each candidate's concrete
-    /// runtime type for filtering.
+    /// Resolve a homogeneous array of concrete entities without inserting.
+    public final func resolve<T: Persistable & Entity & Sendable>(
+        _ entities: [T],
+        threshold: Float? = nil,
+        limit: Int = Memory.defaultResolveLimit
+    ) async throws -> [ResolvedEntity] {
+        guard !entities.isEmpty else { return [] }
+        let effectiveThreshold = threshold ?? Self.defaultResolveThreshold
+
+        guard let provider = context.embeddingProvider else {
+            MemoryLog.info(category: "Memory", "[resolve] no embedding provider - returning empty candidates")
+            return entities.map {
+                ResolvedEntity(inputAssertion: $0.assertion)
+            }
+        }
+
+        let queryEmbeddings = try Self.requireEmbeddingBatch(
+            try await provider.embed(entities.map { $0.assertion }),
+            expectedCount: entities.count
+        )
+        var results: [ResolvedEntity] = []
+        results.reserveCapacity(entities.count)
+        for (entity, queryVector) in zip(entities, queryEmbeddings) {
+            results.append(try await resolvedEntity(
+                entity,
+                queryVector: queryVector,
+                threshold: effectiveThreshold,
+                limit: limit
+            ))
+        }
+        return results
+    }
+
+    #if !hasFeature(Embedded)
+    /// Resolve a heterogeneous array of concrete entities without inserting.
+    ///
+    /// Embedded Swift callers use the homogeneous generic overload because the
+    /// runtime cannot open protocol existentials at generic query boundaries.
     public func resolve(
         _ entities: [any Persistable & Entity & Sendable],
         threshold: Float? = nil,
         limit: Int = Memory.defaultResolveLimit
     ) async throws -> [ResolvedEntity] {
-        guard let first = entities.first else { return [] }
-        return try await _resolveEntities(
-            entities,
-            witness: first,
-            threshold: threshold,
-            limit: limit
-        )
-    }
-
-    private func _resolveEntities<E: Persistable & Entity & Sendable>(
-        _ entities: [any Persistable & Entity & Sendable],
-        witness: E,
-        threshold: Float?,
-        limit: Int
-    ) async throws -> [ResolvedEntity] {
+        guard !entities.isEmpty else { return [] }
         let effectiveThreshold = threshold ?? Self.defaultResolveThreshold
 
         guard let provider = context.embeddingProvider else {
@@ -708,32 +850,46 @@ public actor Memory {
         results.reserveCapacity(entities.count)
 
         let queryEmbeddings = try Self.requireEmbeddingBatch(
-            try await provider.embed(entities.map(\.assertion)),
+            try await provider.embed(entities.map { $0.assertion }),
             expectedCount: entities.count
         )
 
         for (entity, queryVector) in zip(entities, queryEmbeddings) {
-            let queryEmbedding = try Self.requireEmbedding(
-                queryVector,
-                dimensions: Swift.type(of: entity).embeddingDimensions
-            )
-            let matches = try await topPersistedCandidates(
-                witness: E.self,
-                typeID: ObjectIdentifier(type(of: entity)),
-                embedding: queryEmbedding,
+            results.append(try await resolvedEntity(
+                entity,
+                queryVector: queryVector,
                 threshold: effectiveThreshold,
-                k: limit,
-                searchLimit: Self.resolutionSearchLimit
-            )
-            results.append(ResolvedEntity(
-                inputAssertion: entity.assertion,
-                candidates: matches
+                limit: limit
             ))
         }
 
-        let withCandidates = results.filter(\.hasCandidates).count
+        let withCandidates = results.filter { $0.hasCandidates }.count
         MemoryLog.info(category: "Memory", "[resolve] \(entities.count) entity inputs -> \(withCandidates) with candidates (threshold=\(effectiveThreshold), limit=\(limit))")
         return results
+    }
+    #endif
+
+    private final func resolvedEntity<E: Persistable & Entity & Sendable>(
+        _ entity: E,
+        queryVector: [Float],
+        threshold: Float,
+        limit: Int
+    ) async throws -> ResolvedEntity {
+        let queryEmbedding = try Self.requireEmbedding(
+            queryVector,
+            dimensions: E.embeddingDimensions
+        )
+        let matches = try await topPersistedCandidates(
+            witness: E.self,
+            embedding: queryEmbedding,
+            threshold: threshold,
+            k: limit,
+            searchLimit: Self.resolutionSearchLimit
+        )
+        return ResolvedEntity(
+            inputAssertion: entity.assertion,
+            candidates: matches
+        )
     }
 
     private static func requireEmbeddingBatch(
@@ -762,26 +918,31 @@ public actor Memory {
         return vector
     }
 
+    #if !hasFeature(Embedded)
     // MARK: - Test Support
 
     /// Count entities stored under the shared polymorphic directory for the
     /// given witness type. Exposed for `@testable` so storage tests can assert
     /// on persisted entity counts.
     internal func _debugEntityCount<T: Persistable & Entity>(witness: T.Type) async throws -> Int {
-        try await context.fdbContext.fetchPolymorphic(T.self).count
+        try await context.databaseContext.fetchPolymorphic(T.self).count
     }
 
     /// Fetch all entities stored under the shared polymorphic directory for
     /// the given witness type. Exposed for `@testable` so tests can inspect
     /// stored entity records.
-    internal func _debugEntities<T: Persistable & Entity>(witness: T.Type) async throws -> [any Persistable] {
-        try await context.fdbContext.fetchPolymorphic(T.self)
+    internal func _debugEntities<T: Persistable & Entity>(witness: T.Type) async throws -> [T] {
+        let models = try await context.databaseContext.fetchPolymorphic(T.self)
+        return try models.compactMap { model in
+            guard model.entity == T.persistableType else { return nil }
+            return try model.decode(as: T.self)
+        }
     }
 
     /// Fetch a concrete Persistable type directly (non-polymorphic).
     /// Exposed for `@testable` diagnostics.
     internal func _debugFetchAll<T: Persistable>(_ type: T.Type) async throws -> [T] {
-        try await context.fdbContext.fetch(type).execute()
+        try await context.databaseContext.fetch(type).execute()
     }
 
     internal func _debugTriples(
@@ -790,14 +951,26 @@ public actor Memory {
         predicate: String = "?predicate",
         object: String = "?object"
     ) async throws -> [(subject: String, predicate: String, object: String)] {
-        let result = try await context.fdbContext.sparql(graph: graph)
-            .where(subject, predicate, object)
+        let result = try await context.databaseContext.sparql(
+            namedGraph: try MemoryRDF.graphName(graph)
+        )
+            .where(
+                subject.hasPrefix("?")
+                    ? .variable(subject)
+                    : try MemoryRDF.executionResource(subject),
+                predicate.hasPrefix("?")
+                    ? .variable(predicate)
+                    : try MemoryRDF.executionPredicate(predicate),
+                object.hasPrefix("?")
+                    ? .variable(object)
+                    : .value(.rdfTerm(try MemoryRDF.objectTerm(object)))
+            )
             .select(["?subject", "?predicate", "?object"])
             .execute()
         return result.bindings.compactMap { binding in
-            guard let subject = binding.string("?subject"),
-                  let predicate = binding.string("?predicate"),
-                  let object = binding.string("?object") else {
+            guard let subject = MemoryRDF.resourceValue(binding, variable: "?subject"),
+                  let predicate = MemoryRDF.resourceValue(binding, variable: "?predicate"),
+                  let object = MemoryRDF.value(binding, variable: "?object") else {
                 return nil
             }
             return (subject, predicate, object)
@@ -856,78 +1029,9 @@ public actor Memory {
     /// commit. Used by diagnostic tests to isolate the dual-write code path
     /// from Memory's normal store logic.
     internal func _debugCommittedDirectInsert<T: Persistable & Sendable>(_ model: T) async throws {
-        context.fdbContext.insert(model)
-        try await context.fdbContext.save()
+        try context.databaseContext.insert(model)
+        try await context.databaseContext.save()
     }
+    #endif
 
-    /// Count raw (key, value) entries directly under the polymorphic items
-    /// subspace of the given group identifier. Bypasses `fetchPolymorphic`
-    /// entirely so diagnostic tests can distinguish "write path didn't write
-    /// to the poly directory" from "read path is broken".
-    internal func _debugRawPolymorphicKeyCount(identifier: String) async throws -> Int {
-        let subspace = try await container.resolvePolymorphicDirectory(for: identifier)
-        let itemSubspace = subspace.subspace(SubspaceKey.items)
-        let (begin, end) = itemSubspace.range()
-        return try await context.fdbContext.executeCanonicalRead { transaction in
-            var count = 0
-            let pairs = try await transaction.collectRange(begin: begin, end: end)
-            count = pairs.count
-            return count
-        }
-    }
-
-    /// Probe the polymorphic items layout. Returns:
-    /// - `itemsPrefixHex`: hex-encoded prefix of the items subspace
-    /// - `allKeysHex`: all raw keys under the items subspace
-    /// - `typeCode`: DJB2 code for `T.persistableType`
-    /// - `typeSubspacePrefixHex`: hex-encoded prefix of
-    ///   `itemSubspace.subspace(typeCode)`
-    /// - `typeScopedKeysHex`: raw keys found under `typeSubspacePrefix` range
-    internal func _debugPolymorphicItemsProbe<T: Persistable & Polymorphable>(
-        _ type: T.Type
-    ) async throws -> (
-        itemsPrefixHex: String,
-        allKeysHex: [String],
-        typeCode: Int64,
-        typeSubspacePrefixHex: String,
-        typeScopedKeysHex: [String]
-    ) {
-        let subspace = try await container.resolvePolymorphicDirectory(for: T.polymorphableType)
-        let itemSubspace = subspace.subspace(SubspaceKey.items)
-        let typeCode = T.typeCode(for: T.persistableType)
-        let typeSubspace = itemSubspace.subspace(typeCode)
-
-        let (beginAll, endAll) = itemSubspace.range()
-        let (beginType, endType) = typeSubspace.range()
-
-        return try await context.fdbContext.executeCanonicalRead { transaction in
-            let allPairs = try await transaction.collectRange(begin: beginAll, end: endAll)
-            let all = allPairs.map { $0.0.map { String(format: "%02x", $0) }.joined() }
-            let typedPairs = try await transaction.collectRange(begin: beginType, end: endType)
-            let typed = typedPairs.map { $0.0.map { String(format: "%02x", $0) }.joined() }
-            return (
-                itemsPrefixHex: itemSubspace.prefix.map { String(format: "%02x", $0) }.joined(),
-                allKeysHex: all,
-                typeCode: typeCode,
-                typeSubspacePrefixHex: typeSubspace.prefix.map { String(format: "%02x", $0) }.joined(),
-                typeScopedKeysHex: typed
-            )
-        }
-    }
-
-    // MARK: - Cosine Similarity
-
-    private static func cosineSimilarity(_ a: [Float], _ b: [Float]) -> Float {
-        var dot: Float = 0
-        var normA: Float = 0
-        var normB: Float = 0
-        for i in 0..<a.count {
-            dot += a[i] * b[i]
-            normA += a[i] * a[i]
-            normB += b[i] * b[i]
-        }
-        let denom = sqrt(normA) * sqrt(normB)
-        guard denom > 0 else { return 0 }
-        return dot / denom
-    }
 }

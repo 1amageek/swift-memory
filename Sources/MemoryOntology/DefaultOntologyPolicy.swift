@@ -1,7 +1,7 @@
 // DefaultOntologyPolicy.swift
 // Default ontology policy with 26 primitive classes and ~120 subclasses
 
-import Database
+import DatabaseKit
 
 /// Default ontology policy.
 ///
@@ -187,25 +187,25 @@ public struct DefaultOntologyPolicy: OntologyPolicy, Sendable {
                 iri: "ex:date",
                 label: "date",
                 domains: [.named("ex:Occurrent")],
-                ranges: [.datatype(XSDDatatype.date.iri)]
+                ranges: [.datatype(XSDDatatype.date.iri.rawValue)]
             )
             OWLDataProperty(
                 iri: "ex:time",
                 label: "time",
                 domains: [.named("ex:Occurrent")],
-                ranges: [.datatype(XSDDatatype.time.iri)]
+                ranges: [.datatype(XSDDatatype.time.iri.rawValue)]
             )
             OWLDataProperty(
                 iri: "ex:startDate",
                 label: "start date",
                 domains: [.named("ex:Occurrent")],
-                ranges: [.datatype(XSDDatatype.date.iri)]
+                ranges: [.datatype(XSDDatatype.date.iri.rawValue)]
             )
             OWLDataProperty(
                 iri: "ex:endDate",
                 label: "end date",
                 domains: [.named("ex:Occurrent")],
-                ranges: [.datatype(XSDDatatype.date.iri)]
+                ranges: [.datatype(XSDDatatype.date.iri.rawValue)]
             )
 
             // ── RBox: External Reference Data Properties ──
@@ -214,19 +214,19 @@ public struct DefaultOntologyPolicy: OntologyPolicy, Sendable {
                 iri: "ex:wikipediaURL",
                 label: "Wikipedia URL",
                 domains: [.thing],
-                ranges: [.datatype(XSDDatatype.anyURI.iri)]
+                ranges: [.datatype(XSDDatatype.anyURI.iri.rawValue)]
             )
             OWLDataProperty(
                 iri: "ex:officialURL",
                 label: "official URL",
                 domains: [.thing],
-                ranges: [.datatype(XSDDatatype.anyURI.iri)]
+                ranges: [.datatype(XSDDatatype.anyURI.iri.rawValue)]
             )
             OWLDataProperty(
                 iri: "ex:imageURL",
                 label: "image URL",
                 domains: [.thing],
-                ranges: [.datatype(XSDDatatype.anyURI.iri)]
+                ranges: [.datatype(XSDDatatype.anyURI.iri.rawValue)]
             )
         }
     }

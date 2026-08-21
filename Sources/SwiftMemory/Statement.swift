@@ -1,8 +1,7 @@
 // Statement.swift
 // RDF Triple persistence model
 
-import Foundation
-import Database
+import DatabaseKit
 
 /// An RDF triple stored in the knowledge graph.
 ///
@@ -12,28 +11,32 @@ public struct Statement: Hashable {
 
     #Directory<Statement>("memory", "triples")
 
-    #Index(GraphIndexKind<Statement>(
-        from: \.subject,
-        edge: \.predicate,
-        to: \.object,
-        graph: \.graph,
-        strategy: .tripleStore
-    ))
+    #Index(
+        .graph(
+            name: "Statement_graph_subject_predicate_object_graph",
+            definition: .rdf(
+                subject: \Statement.subject,
+                predicate: \Statement.predicate,
+                object: \Statement.object,
+                graph: \Statement.graph
+            )
+        )
+    )
 
     /// Unique identifier.
-    public var id: String = UUID().uuidString
+    public var id: String = ""
 
     /// Named graph IRI.
-    public var graph: String = "memory:default"
+    public var graph: RDFTerm = .iri(.xsdString)
 
     /// Subject IRI.
-    public var subject: String = ""
+    public var subject: RDFTerm = .iri(.xsdString)
 
     /// Predicate IRI.
-    public var predicate: String = ""
+    public var predicate: RDFTerm = .iri(.xsdString)
 
     /// Object IRI or literal value.
-    public var object: String = ""
+    public var object: RDFTerm = .iri(.xsdString)
 
     /// Generate a content-addressable ID from triple components.
     ///
@@ -44,4 +47,32 @@ public struct Statement: Hashable {
     ) -> String {
         "\(graph)|\(subject)|\(predicate)|\(object)"
     }
+}
+
+extension Statement: SecurityPolicy {
+    public static func permitsRead(
+        of resource: borrowing Statement,
+        in context: borrowing AuthorizationContext
+    ) -> Bool { true }
+
+    public static func permitsQuery(
+        _ query: borrowing SecurityQuery,
+        in context: borrowing AuthorizationContext
+    ) -> Bool { true }
+
+    public static func permitsCreate(
+        _ newResource: borrowing Statement,
+        in context: borrowing AuthorizationContext
+    ) -> Bool { true }
+
+    public static func permitsUpdate(
+        from resource: borrowing Statement,
+        to newResource: borrowing Statement,
+        in context: borrowing AuthorizationContext
+    ) -> Bool { true }
+
+    public static func permitsDelete(
+        _ resource: borrowing Statement,
+        in context: borrowing AuthorizationContext
+    ) -> Bool { true }
 }

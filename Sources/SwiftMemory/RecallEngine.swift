@@ -1,7 +1,6 @@
 // RecallEngine.swift
 // Spreading activation associative memory
 
-import Foundation
 import Database
 
 /// Associative memory recall via spreading activation.
@@ -19,13 +18,7 @@ public struct RecallEngine: Sendable {
 
     private let context: MemoryContext
 
-    private var graphNames: [String] {
-        var names: [String] = []
-        for graph in [context.graphName, "default"] where !names.contains(graph) {
-            names.append(graph)
-        }
-        return names
-    }
+    private var graphNames: [RDFGraphName] { [context.graphName] }
 
     public init(context: MemoryContext) {
         self.context = context
@@ -68,7 +61,7 @@ public struct RecallEngine: Sendable {
         limit: Int
     ) async throws -> [RecalledEntity] {
 
-        var activation: [String: (count: Int, paths: [String])] = [:]
+        var activation: [ActivationNode: (count: Int, paths: [String])] = [:]
 
         // Step 1: Name recall — find seed entities by label substring match.
         // Free-form statements are stored in `context.graphName`; typed
@@ -76,14 +69,18 @@ public struct RecallEngine: Sendable {
         var seedIRIs: Set<String> = []
         for cue in cues {
             for graph in graphNames {
-                let result = try await context.fdbContext.sparql(graph: graph)
-                    .where("?entity", "rdfs:label", "?label")
+                let result = try await context.databaseContext.sparql(namedGraph: graph)
+                    .where(
+                        .variable("?entity"),
+                        try MemoryRDF.executionPredicate("rdfs:label"),
+                        .variable("?label")
+                    )
                     .filter("?label", contains: cue)
                     .select(["?entity"])
                     .execute()
 
                 for binding in result.bindings {
-                    if let iri = binding.string("?entity") {
+                    if let iri = MemoryRDF.resourceValue(binding, variable: "?entity") {
                         seedIRIs.insert(iri)
                     }
                 }
@@ -95,10 +92,9 @@ public struct RecallEngine: Sendable {
 
         // Step 2: Spread from each seed
         for seedIRI in seedIRIs {
-            activate(&activation, iri: seedIRI, path: "direct match")
+            activate(&activation, node: .resource(seedIRI), path: "direct match")
             try await spread(
                 from: seedIRI,
-                seedIRI: seedIRI,
                 hop: 1,
                 maxHops: maxHops,
                 visited: [seedIRI],
@@ -108,9 +104,20 @@ public struct RecallEngine: Sendable {
 
         // Step 3: Resolve labels and types
         var results: [RecalledEntity] = []
-        for (iri, entry) in activation {
-            let label = try await resolveLabel(for: iri)
-            let type = try await resolveType(for: iri)
+        for (node, entry) in activation {
+            let iri: String
+            let label: String
+            let type: String
+            switch node {
+            case .resource(let value):
+                iri = value
+                label = try await resolveLabel(for: value)
+                type = try await resolveType(for: value)
+            case .literal(let value):
+                iri = value
+                label = value
+                type = "Literal"
+            }
             results.append(RecalledEntity(
                 iri: iri,
                 label: label,
@@ -129,11 +136,10 @@ public struct RecallEngine: Sendable {
     /// Recursive bidirectional spread.
     private func spread(
         from iri: String,
-        seedIRI: String,
         hop: Int,
         maxHops: Int,
         visited: Set<String>,
-        activation: inout [String: (count: Int, paths: [String])]
+        activation: inout [ActivationNode: (count: Int, paths: [String])]
     ) async throws {
         guard hop <= maxHops else { return }
 
@@ -141,55 +147,81 @@ public struct RecallEngine: Sendable {
         for graph in graphNames {
             for sourceTerm in sourceTerms {
                 // Outgoing: iri → ?rel → ?target
-                let outgoing = try await context.fdbContext.sparql(graph: graph)
-                    .where(sourceTerm, "?rel", "?target")
+                let outgoing = try await context.databaseContext.sparql(namedGraph: graph)
+                    .where(
+                        try MemoryRDF.executionResource(sourceTerm),
+                        .variable("?rel"),
+                        .variable("?target")
+                    )
                     .select(["?target", "?rel"])
                     .execute()
 
                 for binding in outgoing.bindings {
-                    guard let target = binding.string("?target"),
-                          let rel = binding.string("?rel"),
-                          !Self.excludedPredicates.contains(rel),
-                          !target.hasPrefix("\"") else { continue }
+                    guard case .rdfTerm(let targetTerm)? = binding["?target"],
+                          let rel = MemoryRDF.resourceValue(binding, variable: "?rel"),
+                          !Self.excludedPredicates.contains(rel) else { continue }
 
-                    let canonicalTarget = try await canonicalTerm(for: target)
-                    guard !visited.contains(canonicalTarget) else { continue }
+                    switch targetTerm {
+                    case .iri, .blankNode:
+                        guard let target = MemoryRDF.value(targetTerm) else { continue }
+                        let canonicalTarget = try await canonicalTerm(for: target)
+                        guard !visited.contains(canonicalTarget) else { continue }
 
-                    activate(&activation, iri: canonicalTarget, path: "\(sourceTerm) --[\(rel)]--> \(target)")
+                        activate(
+                            &activation,
+                            node: .resource(canonicalTarget),
+                            path: "\(sourceTerm) --[\(rel)]--> \(target)"
+                        )
 
-                    var nextVisited = visited
-                    nextVisited.insert(canonicalTarget)
-                    try await spread(
-                        from: canonicalTarget,
-                        seedIRI: seedIRI,
-                        hop: hop + 1,
-                        maxHops: maxHops,
-                        visited: nextVisited,
-                        activation: &activation
-                    )
+                        var nextVisited = visited
+                        nextVisited.insert(canonicalTarget)
+                        try await spread(
+                            from: canonicalTarget,
+                            hop: hop + 1,
+                            maxHops: maxHops,
+                            visited: nextVisited,
+                            activation: &activation
+                        )
+                    case .literal:
+                        guard let target = MemoryRDF.value(targetTerm) else { continue }
+                        activate(
+                            &activation,
+                            node: .literal(target),
+                            path: "\(sourceTerm) --[\(rel)]--> \(target)"
+                        )
+                    case .tripleTerm:
+                        continue
+                    }
                 }
 
                 // Incoming: ?source → ?rel → iri
-                let incoming = try await context.fdbContext.sparql(graph: graph)
-                    .where("?source", "?rel", sourceTerm)
+                let incoming = try await context.databaseContext.sparql(namedGraph: graph)
+                    .where(
+                        .variable("?source"),
+                        .variable("?rel"),
+                        try MemoryRDF.executionResource(sourceTerm)
+                    )
                     .select(["?source", "?rel"])
                     .execute()
 
                 for binding in incoming.bindings {
-                    guard let source = binding.string("?source"),
-                          let rel = binding.string("?rel"),
+                    guard let source = MemoryRDF.resourceValue(binding, variable: "?source"),
+                          let rel = MemoryRDF.resourceValue(binding, variable: "?rel"),
                           !Self.excludedPredicates.contains(rel) else { continue }
 
                     let canonicalSource = try await canonicalTerm(for: source)
                     guard !visited.contains(canonicalSource) else { continue }
 
-                    activate(&activation, iri: canonicalSource, path: "\(source) --[\(rel)]--> \(sourceTerm)")
+                    activate(
+                        &activation,
+                        node: .resource(canonicalSource),
+                        path: "\(source) --[\(rel)]--> \(sourceTerm)"
+                    )
 
                     var nextVisited = visited
                     nextVisited.insert(canonicalSource)
                     try await spread(
                         from: canonicalSource,
-                        seedIRI: seedIRI,
                         hop: hop + 1,
                         maxHops: maxHops,
                         visited: nextVisited,
@@ -202,15 +234,20 @@ public struct RecallEngine: Sendable {
 
     // MARK: - Activation
 
+    private enum ActivationNode: Hashable {
+        case resource(String)
+        case literal(String)
+    }
+
     private func activate(
-        _ activation: inout [String: (count: Int, paths: [String])],
-        iri: String,
+        _ activation: inout [ActivationNode: (count: Int, paths: [String])],
+        node: ActivationNode,
         path: String
     ) {
-        var entry = activation[iri] ?? (count: 0, paths: [])
+        var entry = activation[node] ?? (count: 0, paths: [])
         entry.count += 1
         entry.paths.append(path)
-        activation[iri] = entry
+        activation[node] = entry
     }
 
     // MARK: - Resolution
@@ -218,11 +255,16 @@ public struct RecallEngine: Sendable {
     private func resolveLabel(for iri: String) async throws -> String {
         for term in try await equivalentTerms(for: iri) {
             for graph in graphNames {
-                let result = try await context.fdbContext.sparql(graph: graph)
-                    .where(term, "rdfs:label", "?label")
+                let result = try await context.databaseContext.sparql(namedGraph: graph)
+                    .where(
+                        try MemoryRDF.executionResource(term),
+                        try MemoryRDF.executionPredicate("rdfs:label"),
+                        .variable("?label")
+                    )
                     .select(["?label"])
                     .execute()
-                if let raw = result.bindings.first?.string("?label") {
+                if let first = result.bindings.first,
+                   let raw = MemoryRDF.value(first, variable: "?label") {
                     return cleanLiteral(raw)
                 }
             }
@@ -233,11 +275,16 @@ public struct RecallEngine: Sendable {
     private func resolveType(for iri: String) async throws -> String {
         for term in try await equivalentTerms(for: iri) {
             for graph in graphNames {
-                let result = try await context.fdbContext.sparql(graph: graph)
-                    .where(term, "rdf:type", "?type")
+                let result = try await context.databaseContext.sparql(namedGraph: graph)
+                    .where(
+                        try MemoryRDF.executionResource(term),
+                        try MemoryRDF.executionPredicate("rdf:type"),
+                        .variable("?type")
+                    )
                     .select(["?type"])
                     .execute()
-                if let type = result.bindings.first?.string("?type") {
+                if let first = result.bindings.first,
+                   let type = MemoryRDF.resourceValue(first, variable: "?type") {
                     return type
                 }
             }
@@ -267,13 +314,17 @@ public struct RecallEngine: Sendable {
         guard !storageID.isEmpty else { return [] }
         var matches: [String] = []
         for graph in graphNames {
-            let result = try await context.fdbContext.sparql(graph: graph)
-                .where("?entity", "rdf:type", "?type")
+            let result = try await context.databaseContext.sparql(namedGraph: graph)
+                .where(
+                    .variable("?entity"),
+                    try MemoryRDF.executionPredicate("rdf:type"),
+                    .variable("?type")
+                )
                 .filter("?entity", contains: "/\(storageID)")
                 .select(["?entity"])
                 .execute()
             for binding in result.bindings {
-                if let iri = binding.string("?entity") {
+                if let iri = MemoryRDF.resourceValue(binding, variable: "?entity") {
                     matches.append(iri)
                 }
             }
@@ -300,26 +351,19 @@ public struct RecallEngine: Sendable {
     }
 
     private func cleanLiteral(_ raw: String) -> String {
-        guard raw.hasPrefix("\"") else { return raw }
-        if let range = raw.range(of: "\"^^", options: .backwards) {
-            return String(raw[raw.index(after: raw.startIndex)..<range.lowerBound])
-        }
-        if let range = raw.range(of: "\"@", options: .backwards) {
-            return String(raw[raw.index(after: raw.startIndex)..<range.lowerBound])
-        }
-        if raw.hasSuffix("\"") {
-            return String(raw.dropFirst().dropLast())
-        }
-        return raw
+        guard raw.hasPrefix("\""),
+              let closingQuote = raw.lastIndex(of: "\""),
+              closingQuote > raw.startIndex else { return raw }
+        return String(raw[raw.index(after: raw.startIndex)..<closingQuote])
     }
 
     // MARK: - Given Store
 
     private func searchGivens(embedding: [Float], limit: Int) async throws -> [Given] {
-        let results = try await context.fdbContext.findSimilar(Given.self)
-            .vector(\.embedding, dimensions: embedding.count)
+        let results = try await context.databaseContext.findSimilar(Given.self)
+            .vector(Given.fields.embedding, dimensions: embedding.count)
             .query(embedding, k: limit)
             .execute()
-        return results.map(\.item)
+        return results.map { $0.item }
     }
 }

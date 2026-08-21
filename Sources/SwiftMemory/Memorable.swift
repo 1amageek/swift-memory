@@ -1,7 +1,9 @@
 // Memorable.swift
 // Protocol for types that can be stored as Given
 
+#if canImport(Foundation)
 import Foundation
+#endif
 
 /// A type that can be stored as raw sensory data (Given) in Memory.
 ///
@@ -25,6 +27,7 @@ extension String: Memorable {
     public var payloadRef: String { self }
 }
 
+#if canImport(Foundation)
 extension Data: Memorable {
     public var modality: String { "data" }
     public var payloadRef: String { base64EncodedString() }
@@ -34,3 +37,4 @@ extension URL: Memorable {
     public var modality: String { "url" }
     public var payloadRef: String { absoluteString }
 }
+#endif

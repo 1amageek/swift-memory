@@ -1,8 +1,7 @@
 // Trace.swift
 // Memory trace linking Given (episode) to Statement (fact)
 
-import Foundation
-import Database
+import DatabaseKit
 
 /// A memory trace links a Given (sensory episode) to a Statement (fact).
 ///
@@ -16,15 +15,43 @@ public struct Trace {
 
     #Directory<Trace>("memory", "traces")
 
-    #Index(ScalarIndexKind<Trace>(fields: [\.givenID]))
-    #Index(ScalarIndexKind<Trace>(fields: [\.statementID]))
+    #Index(.ordered(name: "Trace_givenID", keys: [.ascending(\Trace.givenID)]))
+    #Index(.ordered(name: "Trace_statementID", keys: [.ascending(\Trace.statementID)]))
 
     /// Unique identifier (content-addressable: givenID|statementID).
-    public var id: String = UUID().uuidString
+    public var id: String = ""
 
     /// The Given (episode) that produced this fact.
     public var givenID: String = ""
 
     /// The Statement (fact) that was learned.
     public var statementID: String = ""
+}
+
+extension Trace: SecurityPolicy {
+    public static func permitsRead(
+        of resource: borrowing Trace,
+        in context: borrowing AuthorizationContext
+    ) -> Bool { true }
+
+    public static func permitsQuery(
+        _ query: borrowing SecurityQuery,
+        in context: borrowing AuthorizationContext
+    ) -> Bool { true }
+
+    public static func permitsCreate(
+        _ newResource: borrowing Trace,
+        in context: borrowing AuthorizationContext
+    ) -> Bool { true }
+
+    public static func permitsUpdate(
+        from resource: borrowing Trace,
+        to newResource: borrowing Trace,
+        in context: borrowing AuthorizationContext
+    ) -> Bool { true }
+
+    public static func permitsDelete(
+        _ resource: borrowing Trace,
+        in context: borrowing AuthorizationContext
+    ) -> Bool { true }
 }

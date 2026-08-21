@@ -1,8 +1,6 @@
 // EmbeddingProvider.swift
 // Protocol for text embedding generation
 
-import Foundation
-
 /// Abstraction for generating vector embeddings from text.
 ///
 /// Implementations wrap specific ML backends (MLX, CoreML, etc.)
@@ -98,10 +96,14 @@ public actor HostEmbeddingProvider: EmbeddingProvider {
 
     private func validate(_ texts: [String]) throws {
         for text in texts {
-            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if text.isEmpty || text.allSatisfy(Self.isInputWhitespace) {
                 throw HostEmbeddingProviderError.emptyText
             }
         }
+    }
+
+    private static func isInputWhitespace(_ character: Character) -> Bool {
+        character == " " || character == "\n" || character == "\r" || character == "\t"
     }
 
     private static func preparedVector(

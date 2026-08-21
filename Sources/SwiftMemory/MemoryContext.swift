@@ -3,17 +3,20 @@
 
 import Database
 
-/// Context providing FDB access for Memory operations.
+/// Context providing database access for Memory operations.
 public struct MemoryContext: Sendable {
 
-    /// FDB context for persistence operations.
-    public let fdbContext: FDBContext
+    /// Database context for persistence operations.
+    public let databaseContext: DatabaseContext
 
     /// Named graph for this memory instance.
-    public let graphName: String
+    public let graphName: RDFGraphName
 
     /// Optional embedding provider for vector-based recall.
     public let embeddingProvider: (any EmbeddingProvider)?
+
+    /// Absolute time source shared by database and memory records.
+    public let wallClock: any WallClock
 
     /// Default ontology IRI prefix.
     public static let ontologyIRI = "memory:"
@@ -24,13 +27,15 @@ public struct MemoryContext: Sendable {
     }
 
     public init(
-        fdbContext: FDBContext,
-        graphName: String = "memory:default",
-        embeddingProvider: (any EmbeddingProvider)? = nil
+        databaseContext: DatabaseContext,
+        graphName: RDFGraphName,
+        embeddingProvider: (any EmbeddingProvider)? = nil,
+        wallClock: any WallClock = MemoryWallClock()
     ) {
-        self.fdbContext = fdbContext
+        self.databaseContext = databaseContext
         self.graphName = graphName
         self.embeddingProvider = embeddingProvider
+        self.wallClock = wallClock
     }
 }
 
@@ -38,6 +43,9 @@ public struct MemoryContext: Sendable {
 public enum MemoryError: Error, Sendable {
     case recallFailed(String)
     case invalidQuery(String)
+    case invalidRDFTerm(position: String, value: String)
+    case invalidIdentifierTimestamp(Timestamp)
+    case invalidEntityIdentifier(type: String)
 
     /// Thrown when `store()` is called with entities but no embedding provider
     /// has been configured. Stored entities need embeddings for later vector

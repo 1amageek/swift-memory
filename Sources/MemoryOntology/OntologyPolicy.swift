@@ -1,7 +1,7 @@
 // OntologyPolicy.swift
 // Protocol for ontology design policies
 
-import Database
+import DatabaseKit
 
 /// Ontology design policy that defines the allowed class hierarchy and properties.
 ///

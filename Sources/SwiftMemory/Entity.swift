@@ -1,10 +1,7 @@
 // Entity.swift
 // Polymorphic protocol for cross-type entity resolution
 
-import Foundation
-import Database
-import Core
-import Vector
+import DatabaseKit
 
 /// Polymorphic protocol enabling cross-type entity search and resolution.
 ///
@@ -33,15 +30,37 @@ import Vector
 /// [memory/entities]/R/[typeCode]/[id]                                   -> protobuf
 /// [memory/entities]/I/Entity_vector_embedding/[vector]/[typeCode]/[id]  -> empty
 /// ```
-public protocol Entity: Polymorphable {
+@Polymorphable(identifier: "Entity")
+@PolymorphicDirectory("memory", "entities")
+@PolymorphicIndex(
+    .vector(
+        name: "Entity_vector_embedding",
+        embedding: "embedding",
+        dimensions: 768,
+        metric: .cosine
+    )
+)
+public protocol Entity: Polymorphable<EntityPolymorphicGroup>, SecurityPolicy {
 
     /// Embedding vector dimensionality for the shared Entity index.
     ///
-    /// All conforming types registered in the same `Memory` instance MUST
-    /// agree on this value. A default of 768 is provided (EmbeddingGemma 300M
-    /// native dim); override only when substituting an `EmbeddingProvider` whose
-    /// output dimensionality differs.
+    /// All conforming types registered in the same `Memory` instance MUST use
+    /// 768 dimensions, matching the statically compiled polymorphic index.
+    /// Registration rejects any override with a different value.
     static var embeddingDimensions: Int { get }
+
+    /// Canonical string identifier used in graph resources and recall output.
+    var memoryID: String { get }
+
+    /// Stable semantic type name used when the assertion omits `rdf:type`.
+    static var memoryType: String { get }
+
+    /// Human-readable label persisted as `rdfs:label` for recall results.
+    ///
+    /// Return `nil` when the entity has no stable display label. Memory then
+    /// uses the persisted entity identifier instead of inferring a field via
+    /// runtime reflection, which is unavailable on Embedded Swift targets.
+    var memoryLabel: String? { get }
 
     /// RDF/Turtle class assertion for candidate retrieval.
     ///
@@ -52,7 +71,7 @@ public protocol Entity: Polymorphable {
     /// Embedding vector of `assertion`.
     ///
     /// Populated by `Memory.store()` on first insert.
-    var embedding: [Float] { get set }
+    var embedding: Vector { get set }
 }
 
 // MARK: - Shared Constants
@@ -60,32 +79,35 @@ public protocol Entity: Polymorphable {
 extension Entity {
     /// Default embedding dimensions: 768 (EmbeddingGemma 300M native).
     public static var embeddingDimensions: Int { 768 }
+
+    /// Entities opt in to a human-readable label explicitly.
+    public var memoryLabel: String? { nil }
 }
 
-// MARK: - Polymorphable Conformance
+extension Entity where Self: Persistable, Self.ID == String {
+    /// String identifiers are already in Memory's canonical graph domain.
+    public var memoryID: String { id }
 
-extension Entity {
-    public static var polymorphableType: String { "Entity" }
-
-    public static var polymorphicDirectoryPathComponents: [any DirectoryPathElement] {
-        [Path("memory"), Path("entities")]
-    }
+    /// The statically generated persistable type is stable across platforms.
+    public static var memoryType: String { persistableType }
 }
-
-// MARK: - Polymorphic Indexes
 
 extension Entity where Self: Persistable {
-    public static var polymorphicIndexDescriptors: [IndexDescriptor] {
-        [
-            IndexDescriptor(
-                name: "Entity_vector_embedding",
-                keyPaths: [\Self.embedding],
-                kind: VectorIndexKind<Self>(
-                    embedding: \Self.embedding,
-                    dimensions: embeddingDimensions,
-                    metric: .cosine
-                )
+    static func persistedEmbeddingField() throws -> Field<Self, Vector> {
+        guard let schema = fieldSchemas.first(where: { $0.name == "embedding" }),
+              schema.type == .vector,
+              !schema.isOptional,
+              !schema.isArray else {
+            throw MemoryError.invalidQuery(
+                "\(persistableType).embedding is not a required vector field"
             )
-        ]
+        }
+        return Field(
+            identity: FieldIdentity(
+                name: schema.name,
+                number: schema.fieldNumber
+            ),
+            type: schema.type
+        )
     }
 }

@@ -6,10 +6,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 swift build
-xcodebuild test -scheme Memory -destination 'platform=macOS' -maximum-test-execution-time-allowance 60
+xcodebuild test -scheme swift-memory-Package -destination 'platform=macOS' -maximum-test-execution-time-allowance 60
 ```
 
-Requires FoundationDB client library at `/usr/local/lib` (linker flags are configured in Package.swift).
+The package uses Database Framework's `SQLite`, `VectorIndexes`, and
+`GraphIndexes` traits. It does not require a local FoundationDB client for the
+default in-memory or SQLite paths.
+
+When using a Swift development snapshot with Xcode, the test bundle may need
+the snapshot's `usr/lib/swift/macosx/testing` directory added to
+`LD_RUNPATH_SEARCH_PATHS` so `libTesting.dylib` is available to xctest.
 
 ## Architecture
 
@@ -26,25 +32,40 @@ Memory is a knowledge persistence system for LLM agents. It stores **Given** (se
 ### Data Flow
 
 ```
-Input → MemoryEncoding (client-provided) → [Given, Knowledge] → Memory.store() → FDB
-Memory.recall(query) → RecallEngine → vector search + graph traversal → MemoryBatch
+Input → client interpretation → MemoryBatch → Memory.store() → DatabaseContext
+Memory.recall(query) → RecallEngine → vector search + graph traversal → RecallResult
 ```
 
 ### Key Types
 
-- **`Memory`** (actor) — public API: `store(any MemoryEncodable)` / `recall(RecallQuery) -> MemoryBatch`
-- **`MemoryEncoding`** (protocol) — Concept Protocol; client implements `encode(any MemoryEncodable) -> MemoryBatch`
-- **`Given`** (`@Persistable`) — sensory material with vector embedding; ScalarIndex on timestamp/source, VectorIndex on embedding (384d cosine)
-- **`Statement`** (`@Persistable`) — RDF triple (subject/predicate/object); GraphIndex with `.tripleStore` strategy
-- **`MemoryBatch`** — `givens: [Given]` + `knowledge: [Statement]`; `asHOOT()` for compact LLM context
+- **`Memory`** (actor) — public API: `store` / `resolve` / `recall`
+- **`MemoryEntityRegistration`** — binds static schema, executable runtime, polymorphic indexes, and authorization policy
+- **`MemoryEntityRecord`** — captures concrete entity metadata and a statically specialized insert closure for heterogeneous batches
+- **`Given`** (`@Persistable`) — sensory material with a 768-dimensional `Vector`; ordered timestamp/source indexes and cosine vector index
+- **`Statement`** (`@Persistable`) — typed RDF quad (`RDFTerm` graph/subject/predicate/object) with a canonical graph index
+- **`MemoryBatch`** — typed entities, explicit statement records, and endpoint aliases
 - **`RecallEngine`** — vector similarity search on Given, SPARQL graph traversal on Statement
 - **`OntologyPolicy`** — 26 primitive classes, ~120 subclasses, seed properties (copied from AURORA, `MemoryContext` namespace)
 
 ### Dependencies
 
-- **database-kit** — `@Persistable` macro, `GraphIndexKind`, `VectorIndexKind`, `OWLOntology`
-- **database-framework** — `FDBContext`, `DBContainer`, SPARQL execution, `GraphIndex`
+- **database-kit 26.819+** — static `Schema.Entity`, `@Persistable`, polymorphic metadata, `RDFTerm`, `Vector`, and `SecurityPolicy`
+- **database-framework 26.819+** — explicit `DatabaseRuntimeConfiguration`, `DatabaseContext`, SQLite/in-memory containers, vector and SPARQL execution
 - **swift-hoot** — HOOT compact format for OWL ontology serialization (~1/3 tokens vs Turtle)
+
+### Database Runtime Contract
+
+- Schema construction uses `[Schema.Entity]`; do not restore runtime metatype schema discovery.
+- Every schema entity has a matching `EntityRuntimeRegistration`.
+- Every registered client `Entity` supplies a `SecurityPolicy`; policy evaluation remains enabled.
+- Database and memory use the same explicit monotonic and wall clocks.
+- Persisted vectors use `DatabaseTypes.Vector`; convert provider `[Float]` output only at the persistence boundary.
+- Graph fields and queries remain typed as `RDFTerm`, `RDFGraphName`, and explicit SPARQL execution terms.
+- Content-addressable statements use explicit `upsert`; other entity insertion retains create semantics.
+- Entity vector index dimensions are fixed at 768 across the `Entity` polymorphic group.
+- Entity graph identity is explicit through `memoryID`, `memoryType`, and `memoryLabel`; do not restore reflection-based field discovery.
+- Heterogeneous `MemoryBatch` values store `MemoryEntityRecord`, which specializes generic database insertion when the concrete entity is captured.
+- Embedded Swift has no Foundation reflection or `Codable`. Keep core value and storage semantics common, and gate only capability-specific conveniences.
 
 ### OntologyPolicy
 

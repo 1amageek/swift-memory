@@ -1,20 +1,19 @@
 // MemoryBatch.swift
 // Result of MemoryEncoding interpretation
 
-import Foundation
 import Database
 
 /// The result of MemoryEncoding interpretation.
 ///
-/// Contains typed @OWLClass entities and explicit relationship statements.
+/// Contains typed entities and explicit relationship statements.
 /// NOT Codable — MemoryEncoding implementation handles JSON decode internally.
 public struct MemoryBatch: Sendable {
 
-    /// Typed @OWLClass entities to insert.
+    /// Typed entities to insert.
     /// Must conform to `Entity` so `Memory.store()` can embed and persist them.
     /// Store also writes recall identity statements for rdf:type and rdfs:label
     /// under the inserted entity ID.
-    public var entities: [any Persistable & Entity & Sendable]
+    public var entities: [MemoryEntityRecord]
 
     /// Explicit relationship triples beyond what OntologyIndex generates.
     /// e.g. ("Alice", "ex:worksAt", "Acme") — inter-entity relationships.
@@ -31,7 +30,7 @@ public struct MemoryBatch: Sendable {
     public static let empty = MemoryBatch(entities: [], statements: [])
 
     public init(
-        entities: [any Persistable & Entity & Sendable] = [],
+        entities: [MemoryEntityRecord] = [],
         statements: [StatementRecord] = [],
         aliases: [String: String] = [:]
     ) {
@@ -42,9 +41,9 @@ public struct MemoryBatch: Sendable {
 
     // MARK: - Builder Methods
 
-    /// Add a typed @OWLClass entity.
+    /// Add a typed entity.
     public mutating func entity(_ entity: some Persistable & Entity & Sendable) {
-        entities.append(entity)
+        entities.append(MemoryEntityRecord(entity))
     }
 
     /// Add an explicit relationship triple.
@@ -87,7 +86,7 @@ extension MemoryBatch: MemoryBatchConvertible {
 ///
 /// Used for inter-entity relationships that OntologyIndex
 /// does not auto-generate (e.g. "Alice worksAt Acme").
-public struct StatementRecord: Sendable, Codable, Hashable {
+public struct StatementRecord: Sendable, Hashable {
     public var subject: String
     public var predicate: String
     public var object: String
@@ -98,3 +97,7 @@ public struct StatementRecord: Sendable, Codable, Hashable {
         self.object = object
     }
 }
+
+#if !hasFeature(Embedded)
+extension StatementRecord: Codable {}
+#endif

@@ -1,9 +1,8 @@
 // AppleEmbeddingProvider.swift
 // EmbeddingProvider backed by Apple's NLContextualEmbedding.
 
-import Foundation
-
 #if canImport(NaturalLanguage)
+import Foundation
 import NaturalLanguage
 
 /// Errors thrown by `AppleEmbeddingProvider`.

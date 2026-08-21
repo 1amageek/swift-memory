@@ -1,8 +1,6 @@
 // RecallQuery.swift
 // Query parameters for memory recall
 
-import Foundation
-
 /// Parameters for recalling relevant entities from memory.
 ///
 /// Supports two recall strategies:
