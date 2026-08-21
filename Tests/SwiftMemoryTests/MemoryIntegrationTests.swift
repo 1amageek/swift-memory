@@ -67,31 +67,37 @@ struct TestOrganization: Entity, TestSecurityPolicy {
 protocol AuthenticatedTestSecurityPolicy: SecurityPolicy {}
 
 extension AuthenticatedTestSecurityPolicy {
+    private static func hasWriterRole(
+        _ context: borrowing AuthorizationContext
+    ) -> Bool {
+        context.principal?.roles.contains("memory-writer") == true
+    }
+
     static func permitsRead(
         of resource: borrowing Self,
         in context: borrowing AuthorizationContext
-    ) -> Bool { context.isAuthenticated }
+    ) -> Bool { hasWriterRole(context) }
 
     static func permitsQuery(
         _ query: borrowing SecurityQuery,
         in context: borrowing AuthorizationContext
-    ) -> Bool { context.isAuthenticated }
+    ) -> Bool { hasWriterRole(context) }
 
     static func permitsCreate(
         _ newResource: borrowing Self,
         in context: borrowing AuthorizationContext
-    ) -> Bool { context.isAuthenticated }
+    ) -> Bool { hasWriterRole(context) }
 
     static func permitsUpdate(
         from resource: borrowing Self,
         to newResource: borrowing Self,
         in context: borrowing AuthorizationContext
-    ) -> Bool { context.isAuthenticated }
+    ) -> Bool { hasWriterRole(context) }
 
     static func permitsDelete(
         _ resource: borrowing Self,
         in context: borrowing AuthorizationContext
-    ) -> Bool { context.isAuthenticated }
+    ) -> Bool { hasWriterRole(context) }
 }
 
 @Persistable
@@ -356,25 +362,28 @@ struct MemoryIntegrationTests {
         var batch = MemoryBatch()
         batch.entity(ProtectedTestPerson(name: "Alice", assertion: ":Alice a :Person ."))
 
-        let anonymousMemory = try await Memory(
+        let localMemory = try await Memory(
             path: nil,
             entityRegistrations: [registration],
             embeddingProvider: StubEmbeddingProvider()
         )
         do {
-            try await anonymousMemory.store(batch)
-            Issue.record("Anonymous entity creation must be denied")
+            try await localMemory.store(batch)
+            Issue.record("Entity creation without the required role must be denied")
         } catch let error as SecurityError {
             #expect(error.operation == .create)
             #expect(error.targetType == ProtectedTestPerson.persistableType)
-            #expect(error.userID == nil)
+            #expect(error.userID == "swift-memory.local")
         }
 
         let authenticatedMemory = try await Memory(
             path: nil,
             entityRegistrations: [registration],
             embeddingProvider: StubEmbeddingProvider(),
-            authorization: .authenticated(Principal(identifier: "test-user"))
+            authorization: .authenticated(Principal(
+                identifier: "test-user",
+                roles: ["memory-writer"]
+            ))
         )
         try await authenticatedMemory.store(batch)
         let stored = try await authenticatedMemory._debugFetchAll(ProtectedTestPerson.self)
@@ -401,6 +410,7 @@ struct MemoryIntegrationTests {
 
             let result = try await memory.recall(keywords: ["Alice"])
             #expect(result.entities.map(\.iri).contains("ex:person/alice"))
+            await memory.shutdown()
         }
 
         do {

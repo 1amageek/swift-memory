@@ -9,9 +9,9 @@ swift build
 xcodebuild test -scheme swift-memory-Package -destination 'platform=macOS' -maximum-test-execution-time-allowance 60
 ```
 
-The package uses Database Framework's `SQLite`, `VectorIndexes`, and
-`GraphIndexes` traits. It does not require a local FoundationDB client for the
-default in-memory or SQLite paths.
+The package uses Database Framework's `SQLite`, `VectorIndexes`,
+`GraphIndexes`, and `MultiBase` traits. It does not require a local
+FoundationDB client for the default in-memory or SQLite paths.
 
 When using a Swift development snapshot with Xcode, the test bundle may need
 the snapshot's `usr/lib/swift/macosx/testing` directory added to
@@ -36,9 +36,17 @@ Input → client interpretation → MemoryBatch → Memory.store() → DatabaseC
 Memory.recall(query) → RecallEngine → vector search + graph traversal → RecallResult
 ```
 
+One `MemoryLayer` maps to one Database Framework `Base`. Unscoped API calls use
+`MemoryLayerSet.defaultLayer`. Cross-layer recall preflights a derived
+Composition and preserves results as Base-qualified groups rather than
+flattening equal identifiers across origins.
+
 ### Key Types
 
 - **`Memory`** (actor) — public API: `store` / `resolve` / `recall`
+- **`MemoryLayer`** — application-defined knowledge layer backed by one Base
+- **`MemoryLayerSet`** — configured Base order and the default API layer
+- **`LayeredRecallResult`** — cross-layer recall grouped by source Base
 - **`MemoryEntityRegistration`** — binds static schema, executable runtime, polymorphic indexes, and authorization policy
 - **`MemoryEntityRecord`** — captures concrete entity metadata and a statically specialized insert closure for heterogeneous batches
 - **`Given`** (`@Persistable`) — sensory material with a 768-dimensional `Vector`; ordered timestamp/source indexes and cosine vector index
@@ -58,6 +66,8 @@ Memory.recall(query) → RecallEngine → vector search + graph traversal → Re
 - Schema construction uses `[Schema.Entity]`; do not restore runtime metatype schema discovery.
 - Every schema entity has a matching `EntityRuntimeRegistration`.
 - Every registered client `Entity` supplies a `SecurityPolicy`; policy evaluation remains enabled.
+- MultiBase grants require an authenticated principal; anonymous initialization fails explicitly.
+- A legacy `singleDatabase` physical root requires explicit export/import migration and is never silently opened as MultiBase.
 - Database and memory use the same explicit monotonic and wall clocks.
 - Persisted vectors use `DatabaseTypes.Vector`; convert provider `[Float]` output only at the persistence boundary.
 - Graph fields and queries remain typed as `RDFTerm`, `RDFGraphName`, and explicit SPARQL execution terms.

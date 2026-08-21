@@ -70,6 +70,60 @@ for given in result.givens {
 }
 ```
 
+### MultiBase Knowledge Layers
+
+Each `MemoryLayer` is one Database Framework `Base`. The Base is the physical
+transaction, authorization, and provenance boundary; layer identity is not
+stored as a repeated field on every entity. Applications choose their own
+layer vocabulary instead of inheriting a fixed cognitive taxonomy.
+
+```swift
+let personal = try MemoryLayer(id: "personal", name: "Personal")
+let shared = try MemoryLayer(id: "shared", name: "Shared")
+let layers = try MemoryLayerSet([personal, shared], default: personal)
+
+let memory = try await Memory(
+    path: "memory.sqlite",
+    layerSet: layers,
+    authorization: .authenticated(Principal(identifier: accountID))
+)
+
+try await memory.store(personalBatch) // Default: personal
+try await memory.store(sharedBatch, in: shared)
+
+let sharedResult = try await memory.recall(
+    keywords: ["project"],
+    in: shared
+)
+let layeredResult = try await memory.recall(
+    RecallQuery(keywords: ["project"]),
+    across: [personal, shared]
+)
+
+await memory.shutdown()
+```
+
+Cross-layer recall first resolves a derived Composition so all selected Base
+grants are authorized together. It then returns `LayeredRecallResult`, grouped
+by layer in request order. Results are deliberately not flattened: an equal
+entity ID in two Bases represents two distinct knowledge origins.
+
+MultiBase persists grants, so `Memory` requires an authenticated principal.
+When no authorization is supplied, the local convenience identity
+`swift-memory.local` is used. Multi-user or service applications should always
+inject their authenticated application principal. `.anonymous` is rejected.
+
+`MemoryLayerSet` is fixed for one `Memory` lifetime. Reopening with an expanded
+set provisions additional Bases; omitting a previously provisioned layer does
+not delete its Base. Call `shutdown()` before releasing path-backed storage or
+reopening the same file with another configuration.
+
+The physical layout changed from Database Framework `singleDatabase` to
+`multiBase`. Existing single-database files fail with
+`MemoryLayerError.singleDatabaseMigrationRequired`; they are never opened or
+silently reinterpreted as MultiBase. Export/import migration must be performed
+explicitly before those files are reused.
+
 ### RecallQuery
 
 Recall supports two strategies, usable independently or together:
@@ -145,6 +199,9 @@ Swift WASM
 | `EmbeddingProvider` | Boundary for native or host-provided embeddings |
 | `RecallQuery` | Query parameters: keywords, embedding, maxHops, limit |
 | `RecallResult` | Result: `entities` (from graph) + `givens` (from vector search) |
+| `MemoryLayer` | Application-defined knowledge layer backed by one Base |
+| `MemoryLayerSet` | Ordered configured layers and the default layer |
+| `LayeredRecallResult` | Cross-layer results grouped by Base-backed origin |
 | `RecalledEntity` | Entity with IRI, label, type, convergence score, and traversal paths |
 | `OntologyPolicy` | Defines allowed classes and properties in the knowledge graph |
 
@@ -230,7 +287,8 @@ Framework's static schema and explicit runtime model.
 | Missing authorization policy tolerated | `Entity: SecurityPolicy`; missing policy is denied |
 | Duplicate insert behaved like upsert | Content-addressable `Statement` explicitly uses `upsert` |
 
-The package selects the `SQLite`, `VectorIndexes`, and `GraphIndexes` traits.
+The package selects the `SQLite`, `VectorIndexes`, `GraphIndexes`, and
+`MultiBase` traits.
 Pass `path: nil` for an in-memory database, a file path for SQLite on macOS, or
 use `Memory(storageEngine:...)` to inject a host storage engine. WASI does not
 provide path-backed SQLite through `Memory(path:)`. Standard and Embedded WASM

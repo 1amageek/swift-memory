@@ -10,11 +10,15 @@ let package = Package(
         .library(name: "SwiftMemory", targets: ["SwiftMemory"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/1amageek/database-kit.git", from: "26.0819.0"),
+        .package(
+            url: "https://github.com/1amageek/database-kit.git",
+            from: "26.0819.0",
+            traits: ["MultiBase"]
+        ),
         .package(
             url: "https://github.com/1amageek/database-framework.git",
             from: "26.0819.3",
-            traits: ["SQLite", "VectorIndexes", "GraphIndexes"]
+            traits: ["SQLite", "VectorIndexes", "GraphIndexes", "MultiBase"]
         ),
         .package(
             url: "https://github.com/hoot-format/swift-hoot.git",

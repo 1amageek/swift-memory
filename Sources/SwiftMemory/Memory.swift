@@ -4,7 +4,7 @@
 #if canImport(Foundation)
 import Foundation
 #endif
-import Database
+@_spi(DatabaseExecution) import Database
 import MemoryOntology
 
 /// Knowledge persistence and recall system.
@@ -40,6 +40,11 @@ import MemoryOntology
 /// ```
 public actor Memory {
 
+    /// Stable local owner used when an application does not inject identity.
+    public static let localAuthorization = AuthorizationContext.authenticated(
+        Principal(identifier: "swift-memory.local")
+    )
+
     /// Default cosine-similarity threshold used by `resolve()` to surface
     /// possible matches to the caller.
     public static let defaultResolveThreshold: Float = 0.90
@@ -49,74 +54,82 @@ public actor Memory {
 
     private static let resolutionSearchLimit = 30
 
-    private let context: MemoryContext
+    private let contexts: [Base.ID: MemoryContext]
     private let container: DBContainer
-    private let recallEngine: RecallEngine
+    private let authorization: AuthorizationContext
 
     public nonisolated let ontologyPolicy: any OntologyPolicy
+    public nonisolated let layerSet: MemoryLayerSet
+
+    public nonisolated var layers: [MemoryLayer] { layerSet.layers }
+    public nonisolated var defaultLayer: MemoryLayer { layerSet.defaultLayer }
 
     public init(
         path: String?,
+        layerSet: MemoryLayerSet? = nil,
         entityRegistrations: [MemoryEntityRegistration] = [],
         ontologyPolicy: any OntologyPolicy = DefaultOntologyPolicy(),
         graphName: String = "memory:default",
         embeddingProvider: (any EmbeddingProvider)? = nil,
         monotonicClock: any StorageMonotonicClock = MemoryMonotonicClock(),
         wallClock: any WallClock = MemoryWallClock(),
-        authorization: AuthorizationContext = .anonymous
+        authorization: AuthorizationContext = Memory.localAuthorization
     ) async throws {
-        self.ontologyPolicy = ontologyPolicy
-
+        _ = try MemoryDatabaseBootstrap.requireAuthenticatedPrincipal(authorization)
+        let resolvedLayerSet: MemoryLayerSet
+        if let layerSet {
+            resolvedLayerSet = layerSet
+        } else {
+            resolvedLayerSet = try MemoryLayerSet.local()
+        }
         let (schema, runtimeConfiguration) = try Self.databaseDefinition(
             entityRegistrations: entityRegistrations
         )
         let graph = try MemoryRDF.graphName(graphName)
 
+        let storageEngine: any StorageEngine
         #if os(WASI)
         guard path == nil else {
             throw MemoryError.pathBackedStorageUnavailableOnWASI
         }
-        self.container = try await DBContainer.open(
-            for: schema,
-            configuration: DBConfiguration(
-                storageEngine: InMemoryEngine(),
-                monotonicClock: monotonicClock,
-                wallClock: wallClock
-            ),
-            runtimeConfiguration: runtimeConfiguration
-        )
+        storageEngine = InMemoryEngine()
         #else
         if let path {
-            self.container = try await DBContainer.sqlite(
-                for: schema,
-                path: path,
-                monotonicClock: monotonicClock,
-                wallClock: wallClock,
-                runtimeConfiguration: runtimeConfiguration
+            storageEngine = try SQLiteStorageEngine(
+                configuration: .file(path)
             )
         } else {
-            self.container = try await DBContainer.inMemory(
-                for: schema,
-                monotonicClock: monotonicClock,
-                wallClock: wallClock,
-                runtimeConfiguration: runtimeConfiguration
-            )
+            storageEngine = InMemoryEngine()
         }
         #endif
 
-        let databaseContext = container.newContext(authorization: authorization)
-        try await databaseContext.ontology.load(
-            ontologyPolicy.buildOntology(),
-            at: wallClock.now
-        )
-
-        self.context = MemoryContext(
-            databaseContext: databaseContext,
+        let storageTopology: DatabaseStorageTopology
+        do {
+            storageTopology = try await MemoryDatabaseBootstrap.localTopology(
+                storageEngine: storageEngine,
+                monotonicClock: monotonicClock
+            )
+        } catch {
+            await storageEngine.shutdown()
+            throw error
+        }
+        let runtime = try await MemoryDatabaseBootstrap.open(
+            schema: schema,
+            runtimeConfiguration: runtimeConfiguration,
+            storageTopology: storageTopology,
+            layerSet: resolvedLayerSet,
+            ontologyPolicy: ontologyPolicy,
             graphName: graph,
             embeddingProvider: embeddingProvider,
-            wallClock: wallClock
+            monotonicClock: monotonicClock,
+            wallClock: wallClock,
+            authorization: authorization
         )
-        self.recallEngine = RecallEngine(context: context)
+        self.ontologyPolicy = ontologyPolicy
+        self.layerSet = resolvedLayerSet
+        self.container = runtime.container
+        self.contexts = runtime.contexts
+        self.authorization = runtime.authorization
     }
 
     /// Create Memory with an explicit storage engine.
@@ -125,44 +138,83 @@ public actor Memory {
     /// provide their own StorageKit-backed persistence boundary.
     public init(
         storageEngine: any StorageEngine,
+        layerSet: MemoryLayerSet? = nil,
         entityRegistrations: [MemoryEntityRegistration] = [],
         ontologyPolicy: any OntologyPolicy = DefaultOntologyPolicy(),
         graphName: String = "memory:default",
         embeddingProvider: (any EmbeddingProvider)? = nil,
         monotonicClock: any StorageMonotonicClock = MemoryMonotonicClock(),
         wallClock: any WallClock = MemoryWallClock(),
-        authorization: AuthorizationContext = .anonymous
+        authorization: AuthorizationContext = Memory.localAuthorization
     ) async throws {
-        self.ontologyPolicy = ontologyPolicy
-
+        _ = try MemoryDatabaseBootstrap.requireAuthenticatedPrincipal(authorization)
+        let resolvedLayerSet: MemoryLayerSet
+        if let layerSet {
+            resolvedLayerSet = layerSet
+        } else {
+            resolvedLayerSet = try MemoryLayerSet.local()
+        }
         let (schema, runtimeConfiguration) = try Self.databaseDefinition(
             entityRegistrations: entityRegistrations
         )
         let graph = try MemoryRDF.graphName(graphName)
-
-        self.container = try await DBContainer.open(
-            for: schema,
-            configuration: DBConfiguration(
-                storageEngine: storageEngine,
-                monotonicClock: monotonicClock,
-                wallClock: wallClock
-            ),
-            runtimeConfiguration: runtimeConfiguration
+        let storageTopology = try await MemoryDatabaseBootstrap.localTopology(
+            storageEngine: storageEngine,
+            monotonicClock: monotonicClock
         )
-
-        let databaseContext = container.newContext(authorization: authorization)
-        try await databaseContext.ontology.load(
-            ontologyPolicy.buildOntology(),
-            at: wallClock.now
-        )
-
-        self.context = MemoryContext(
-            databaseContext: databaseContext,
+        let runtime = try await MemoryDatabaseBootstrap.open(
+            schema: schema,
+            runtimeConfiguration: runtimeConfiguration,
+            storageTopology: storageTopology,
+            layerSet: resolvedLayerSet,
+            ontologyPolicy: ontologyPolicy,
             graphName: graph,
             embeddingProvider: embeddingProvider,
-            wallClock: wallClock
+            monotonicClock: monotonicClock,
+            wallClock: wallClock,
+            authorization: authorization
         )
-        self.recallEngine = RecallEngine(context: context)
+        self.ontologyPolicy = ontologyPolicy
+        self.layerSet = resolvedLayerSet
+        self.container = runtime.container
+        self.contexts = runtime.contexts
+        self.authorization = runtime.authorization
+    }
+
+    /// Create Memory with a host-owned MultiBase storage topology.
+    public init(
+        storageTopology: DatabaseStorageTopology,
+        layerSet: MemoryLayerSet,
+        entityRegistrations: [MemoryEntityRegistration] = [],
+        ontologyPolicy: any OntologyPolicy = DefaultOntologyPolicy(),
+        graphName: String = "memory:default",
+        embeddingProvider: (any EmbeddingProvider)? = nil,
+        monotonicClock: any StorageMonotonicClock = MemoryMonotonicClock(),
+        wallClock: any WallClock = MemoryWallClock(),
+        authorization: AuthorizationContext = Memory.localAuthorization
+    ) async throws {
+        _ = try MemoryDatabaseBootstrap.requireAuthenticatedPrincipal(authorization)
+        let (schema, runtimeConfiguration) = try Self.databaseDefinition(
+            entityRegistrations: entityRegistrations
+        )
+        let graph = try MemoryRDF.graphName(graphName)
+        let runtime = try await MemoryDatabaseBootstrap.open(
+            schema: schema,
+            runtimeConfiguration: runtimeConfiguration,
+            storageTopology: storageTopology,
+            layerSet: layerSet,
+            ontologyPolicy: ontologyPolicy,
+            graphName: graph,
+            embeddingProvider: embeddingProvider,
+            monotonicClock: monotonicClock,
+            wallClock: wallClock,
+            authorization: authorization
+        )
+        self.ontologyPolicy = ontologyPolicy
+        self.layerSet = layerSet
+        self.container = runtime.container
+        self.contexts = runtime.contexts
+        self.authorization = runtime.authorization
     }
 
     private static func databaseDefinition(
@@ -181,7 +233,7 @@ public actor Memory {
         let runtimeConfiguration = try DatabaseFrameworkRuntime.configuration(
             executionIdentity: DatabaseExecutionRuntimeIdentity(
                 identifier: "swift-memory",
-                revision: 1
+                revision: 2
             ),
             entityRuntimes: runtimes,
             authorizationPolicies: [
@@ -193,6 +245,43 @@ public actor Memory {
         return (schema, runtimeConfiguration)
     }
 
+    private func context(for layer: MemoryLayer) throws -> MemoryContext {
+        guard layerSet.contains(layer), let context = contexts[layer.baseID] else {
+            throw MemoryLayerError.layerNotConfigured(layer.baseID)
+        }
+        return context
+    }
+
+    private func selectedLayers(
+        _ requestedLayers: [MemoryLayer]?
+    ) throws -> [(layer: MemoryLayer, context: MemoryContext)] {
+        let selection = requestedLayers ?? layers
+        guard !selection.isEmpty else {
+            throw MemoryLayerError.emptyLayerSelection
+        }
+
+        var seen: Set<Base.ID> = []
+        var selected: [(layer: MemoryLayer, context: MemoryContext)] = []
+        selected.reserveCapacity(selection.count)
+        for layer in selection {
+            guard seen.insert(layer.baseID).inserted else {
+                throw MemoryLayerError.duplicateLayer(layer.baseID)
+            }
+            let layerContext = try context(for: layer)
+            selected.append((layerContext.layer, layerContext))
+        }
+        return selected
+    }
+
+    private func authorizeCompositionRead(
+        _ selected: [(layer: MemoryLayer, context: MemoryContext)]
+    ) async throws {
+        let source = try container
+            .session(authorization: authorization)
+            .composition(bases: selected.map { $0.layer.baseID })
+        _ = try await source.resolve()
+    }
+
     // MARK: - Store
 
     /// Store Given + Knowledge atomically.
@@ -202,8 +291,21 @@ public actor Memory {
     /// created in the payload or registered aliases. Trace records link each
     /// Statement back to its source Given.
     public func store(given: any Memorable, knowledge: any MemoryBatchConvertible) async throws {
+        try await store(given: given, knowledge: knowledge, in: defaultLayer)
+    }
+
+    /// Store Given + Knowledge atomically in one layer.
+    public func store(
+        given: any Memorable,
+        knowledge: any MemoryBatchConvertible,
+        in layer: MemoryLayer
+    ) async throws {
         let batch = knowledge.toBatch()
-        try await persist(given: given, batch: batch)
+        try await persist(
+            given: given,
+            batch: batch,
+            context: try context(for: layer)
+        )
     }
 
     #if canImport(Foundation)
@@ -214,20 +316,52 @@ public actor Memory {
         knowledgeData: Data,
         decode: @Sendable (Data) throws -> MemoryBatch
     ) async throws {
+        try await store(
+            given: given,
+            knowledgeData: knowledgeData,
+            decode: decode,
+            in: defaultLayer
+        )
+    }
+
+    /// Store Given + Knowledge from JSON data in one layer.
+    public func store(
+        given: any Memorable,
+        knowledgeData: Data,
+        decode: @Sendable (Data) throws -> MemoryBatch,
+        in layer: MemoryLayer
+    ) async throws {
         let batch = try decode(knowledgeData)
-        try await persist(given: given, batch: batch)
+        try await persist(
+            given: given,
+            batch: batch,
+            context: try context(for: layer)
+        )
     }
     #endif
 
     /// Store a batch directly (without Given).
     /// No Trace records are created because there is no Given to link from.
     public func store(_ batch: MemoryBatch) async throws {
-        try await persist(given: nil, batch: batch)
+        try await store(batch, in: defaultLayer)
+    }
+
+    /// Store a batch directly in one layer.
+    public func store(_ batch: MemoryBatch, in layer: MemoryLayer) async throws {
+        try await persist(
+            given: nil,
+            batch: batch,
+            context: try context(for: layer)
+        )
     }
 
     // MARK: - Persist (shared implementation)
 
-    private func persist(given: (any Memorable)?, batch: MemoryBatch) async throws {
+    private func persist(
+        given: (any Memorable)?,
+        batch: MemoryBatch,
+        context: MemoryContext
+    ) async throws {
         guard !batch.entities.isEmpty || !batch.statements.isEmpty else {
             MemoryLog.info(category: "Memory", "[store] empty knowledge - nothing saved")
             return
@@ -244,7 +378,8 @@ public actor Memory {
             }
             entityReferenceMap = try await insertEntities(
                 batch.entities,
-                provider: provider
+                provider: provider,
+                context: context
             )
         }
 
@@ -323,7 +458,8 @@ public actor Memory {
     /// - Returns: Map from input entity IDs/assertions to the resolved entity ID.
     private func insertEntities(
         _ entities: [MemoryEntityRecord],
-        provider: any EmbeddingProvider
+        provider: any EmbeddingProvider,
+        context: MemoryContext
     ) async throws -> [String: String] {
         var entityReferenceMap: [String: String] = [:]
         entityReferenceMap.reserveCapacity(entities.count)
@@ -349,7 +485,11 @@ public actor Memory {
             )
 
             let newID = entity.id
-            try insertEntityIdentityStatements(id: newID, entity: entity)
+            try insertEntityIdentityStatements(
+                id: newID,
+                entity: entity,
+                context: context
+            )
             entityReferenceMap[entity.assertion] = newID
             entityReferenceMap[inputID] = newID
             entityReferenceMap[newID] = newID
@@ -362,7 +502,8 @@ public actor Memory {
 
     private func insertEntityIdentityStatements(
         id: String,
-        entity: MemoryEntityRecord
+        entity: MemoryEntityRecord,
+        context: MemoryContext
     ) throws {
         let label = entity.label.flatMap { $0.isEmpty ? nil : $0 } ?? id
         let type = entityType(
@@ -373,19 +514,22 @@ public actor Memory {
         try insertIdentityStatement(
             subject: id,
             predicate: "rdf:type",
-            object: try MemoryRDF.resourceTerm(type)
+            object: try MemoryRDF.resourceTerm(type),
+            context: context
         )
         try insertIdentityStatement(
             subject: id,
             predicate: "rdfs:label",
-            object: .string(label)
+            object: .string(label),
+            context: context
         )
     }
 
     private func insertIdentityStatement(
         subject: String,
         predicate: String,
-        object: RDFTerm
+        object: RDFTerm,
+        context: MemoryContext
     ) throws {
         guard !subject.isEmpty else {
             throw MemoryError.invalidRDFTerm(position: "subject", value: subject)
@@ -498,7 +642,8 @@ public actor Memory {
         embedding: [Float],
         threshold: Float,
         k: Int,
-        searchLimit: Int
+        searchLimit: Int,
+        context: MemoryContext
     ) async throws -> [ResolvedMatch] {
         guard k > 0 else { return [] }
 
@@ -541,14 +686,17 @@ public actor Memory {
         var resolvedMatches: [ResolvedMatch] = []
         resolvedMatches.reserveCapacity(matches.count)
         for match in matches {
-            let context = try await resolveOneHopContext(for: match.id)
+            let statements = try await resolveOneHopContext(
+                for: match.id,
+                context: context
+            )
             resolvedMatches.append(ResolvedMatch(
                 id: match.id,
                 assertion: match.assertion,
                 similarity: match.similarity,
                 label: match.label,
                 type: match.type,
-                context: context
+                context: statements
             ))
         }
         return resolvedMatches
@@ -573,7 +721,10 @@ public actor Memory {
         return tokens[tokens.index(after: predicateIndex)]
     }
 
-    private func resolveOneHopContext(for iri: String) async throws -> [ResolvedContextStatement] {
+    private func resolveOneHopContext(
+        for iri: String,
+        context: MemoryContext
+    ) async throws -> [ResolvedContextStatement] {
         var contextStatements: [ResolvedContextStatement] = []
         var endpointCache: [String: ResolvedEndpoint] = [:]
 
@@ -588,8 +739,16 @@ public actor Memory {
         for binding in outgoing.bindings {
             guard let predicate = MemoryRDF.resourceValue(binding, variable: "?predicate"),
                   let object = MemoryRDF.value(binding, variable: "?object") else { continue }
-            let subjectEndpoint = try await resolvedEndpoint(for: iri, cache: &endpointCache)
-            let objectEndpoint = try await resolvedEndpoint(for: object, cache: &endpointCache)
+            let subjectEndpoint = try await resolvedEndpoint(
+                for: iri,
+                cache: &endpointCache,
+                context: context
+            )
+            let objectEndpoint = try await resolvedEndpoint(
+                for: object,
+                cache: &endpointCache,
+                context: context
+            )
             contextStatements.append(ResolvedContextStatement(
                 direction: .outgoing,
                 subject: iri,
@@ -613,8 +772,16 @@ public actor Memory {
         for binding in incoming.bindings {
             guard let subject = MemoryRDF.resourceValue(binding, variable: "?subject"),
                   let predicate = MemoryRDF.resourceValue(binding, variable: "?predicate") else { continue }
-            let subjectEndpoint = try await resolvedEndpoint(for: subject, cache: &endpointCache)
-            let objectEndpoint = try await resolvedEndpoint(for: iri, cache: &endpointCache)
+            let subjectEndpoint = try await resolvedEndpoint(
+                for: subject,
+                cache: &endpointCache,
+                context: context
+            )
+            let objectEndpoint = try await resolvedEndpoint(
+                for: iri,
+                cache: &endpointCache,
+                context: context
+            )
             contextStatements.append(ResolvedContextStatement(
                 direction: .incoming,
                 subject: subject,
@@ -638,7 +805,8 @@ public actor Memory {
 
     private func resolvedEndpoint(
         for rawValue: String,
-        cache: inout [String: ResolvedEndpoint]
+        cache: inout [String: ResolvedEndpoint],
+        context: MemoryContext
     ) async throws -> ResolvedEndpoint {
         let cleaned = cleanLiteral(rawValue)
         if let cached = cache[cleaned] {
@@ -651,8 +819,8 @@ public actor Memory {
             return endpoint
         }
 
-        let label = try await graphLabel(for: cleaned)
-        let type = try await graphType(for: cleaned)
+        let label = try await graphLabel(for: cleaned, context: context)
+        let type = try await graphType(for: cleaned, context: context)
         let endpoint = ResolvedEndpoint(
             id: cleaned,
             label: label.isEmpty ? cleaned : label,
@@ -662,7 +830,10 @@ public actor Memory {
         return endpoint
     }
 
-    private func graphLabel(for iri: String) async throws -> String {
+    private func graphLabel(
+        for iri: String,
+        context: MemoryContext
+    ) async throws -> String {
         let result = try await context.databaseContext.sparql(namedGraph: context.graphName)
             .where(
                 try MemoryRDF.executionResource(iri),
@@ -678,7 +849,10 @@ public actor Memory {
         return cleanLiteral(raw)
     }
 
-    private func graphType(for iri: String) async throws -> String {
+    private func graphType(
+        for iri: String,
+        context: MemoryContext
+    ) async throws -> String {
         let result = try await context.databaseContext.sparql(namedGraph: context.graphName)
             .where(
                 try MemoryRDF.executionResource(iri),
@@ -700,14 +874,66 @@ public actor Memory {
 
     // MARK: - Recall
 
-    /// Recall from keywords — spreading activation.
+    /// Recall from the default layer using spreading activation.
     public func recall(keywords: [String], maxHops: Int = 2, limit: Int = 20) async throws -> RecallResult {
-        try await recallEngine.execute(RecallQuery(keywords: keywords, maxHops: maxHops, limit: limit))
+        try await recall(
+            RecallQuery(keywords: keywords, maxHops: maxHops, limit: limit),
+            in: defaultLayer
+        )
     }
 
-    /// Recall with a full query.
+    /// Recall from one layer using spreading activation.
+    public func recall(
+        keywords: [String],
+        in layer: MemoryLayer,
+        maxHops: Int = 2,
+        limit: Int = 20
+    ) async throws -> RecallResult {
+        try await recall(
+            RecallQuery(keywords: keywords, maxHops: maxHops, limit: limit),
+            in: layer
+        )
+    }
+
+    /// Recall from the default layer with a full query.
     public func recall(_ query: RecallQuery) async throws -> RecallResult {
-        try await recallEngine.execute(query)
+        try await recall(query, in: defaultLayer)
+    }
+
+    /// Recall from one layer with a full query.
+    public func recall(
+        _ query: RecallQuery,
+        in layer: MemoryLayer
+    ) async throws -> RecallResult {
+        let layerContext = try context(for: layer)
+        return try await RecallEngine(context: layerContext).execute(query)
+    }
+
+    /// Recall across selected layers while preserving each Base origin.
+    ///
+    /// The derived Composition is resolved first so authorization for every
+    /// selected Base is evaluated as one boundary. Results intentionally stay
+    /// grouped by layer because identical model identifiers in different Bases
+    /// represent different knowledge origins.
+    public func recall(
+        _ query: RecallQuery,
+        across requestedLayers: [MemoryLayer]? = nil
+    ) async throws -> LayeredRecallResult {
+        let selected = try selectedLayers(requestedLayers)
+        try await authorizeCompositionRead(selected)
+
+        var results: [MemoryLayerRecallResult] = []
+        results.reserveCapacity(selected.count)
+        for item in selected {
+            let result = try await RecallEngine(context: item.context).execute(query)
+            results.append(MemoryLayerRecallResult(layer: item.layer, result: result))
+        }
+        return LayeredRecallResult(layers: results)
+    }
+
+    /// Finish database streams and release storage resources.
+    public func shutdown() async {
+        await container.shutdown()
     }
 
     // MARK: - Resolve (External API)
@@ -751,9 +977,27 @@ public actor Memory {
         threshold: Float? = nil,
         limit: Int = Memory.defaultResolveLimit
     ) async throws -> [ResolvedEntity] {
+        try await resolve(
+            candidates,
+            witness: witness,
+            in: defaultLayer,
+            threshold: threshold,
+            limit: limit
+        )
+    }
+
+    /// Resolve entity candidates against knowledge in one layer.
+    public final func resolve<T: Persistable & Entity>(
+        _ candidates: [ResolveCandidate],
+        witness: T.Type,
+        in layer: MemoryLayer,
+        threshold: Float? = nil,
+        limit: Int = Memory.defaultResolveLimit
+    ) async throws -> [ResolvedEntity] {
+        let layerContext = try context(for: layer)
         let effectiveThreshold = threshold ?? Self.defaultResolveThreshold
 
-        guard let provider = context.embeddingProvider else {
+        guard let provider = layerContext.embeddingProvider else {
             MemoryLog.info(category: "Memory", "[resolve] no embedding provider - returning empty candidates")
             return candidates.map {
                 ResolvedEntity(inputAssertion: $0.assertion)
@@ -780,7 +1024,8 @@ public actor Memory {
                 embedding: queryEmbedding,
                 threshold: effectiveThreshold,
                 k: limit,
-                searchLimit: Self.resolutionSearchLimit
+                searchLimit: Self.resolutionSearchLimit,
+                context: layerContext
             )
             results.append(ResolvedEntity(
                 inputAssertion: candidate.assertion,
@@ -799,10 +1044,26 @@ public actor Memory {
         threshold: Float? = nil,
         limit: Int = Memory.defaultResolveLimit
     ) async throws -> [ResolvedEntity] {
+        try await resolve(
+            entities,
+            in: defaultLayer,
+            threshold: threshold,
+            limit: limit
+        )
+    }
+
+    /// Resolve homogeneous concrete entities against one layer.
+    public final func resolve<T: Persistable & Entity & Sendable>(
+        _ entities: [T],
+        in layer: MemoryLayer,
+        threshold: Float? = nil,
+        limit: Int = Memory.defaultResolveLimit
+    ) async throws -> [ResolvedEntity] {
         guard !entities.isEmpty else { return [] }
+        let layerContext = try context(for: layer)
         let effectiveThreshold = threshold ?? Self.defaultResolveThreshold
 
-        guard let provider = context.embeddingProvider else {
+        guard let provider = layerContext.embeddingProvider else {
             MemoryLog.info(category: "Memory", "[resolve] no embedding provider - returning empty candidates")
             return entities.map {
                 ResolvedEntity(inputAssertion: $0.assertion)
@@ -820,7 +1081,8 @@ public actor Memory {
                 entity,
                 queryVector: queryVector,
                 threshold: effectiveThreshold,
-                limit: limit
+                limit: limit,
+                context: layerContext
             ))
         }
         return results
@@ -836,10 +1098,26 @@ public actor Memory {
         threshold: Float? = nil,
         limit: Int = Memory.defaultResolveLimit
     ) async throws -> [ResolvedEntity] {
+        try await resolve(
+            entities,
+            in: defaultLayer,
+            threshold: threshold,
+            limit: limit
+        )
+    }
+
+    /// Resolve heterogeneous concrete entities against one layer.
+    public func resolve(
+        _ entities: [any Persistable & Entity & Sendable],
+        in layer: MemoryLayer,
+        threshold: Float? = nil,
+        limit: Int = Memory.defaultResolveLimit
+    ) async throws -> [ResolvedEntity] {
         guard !entities.isEmpty else { return [] }
+        let layerContext = try context(for: layer)
         let effectiveThreshold = threshold ?? Self.defaultResolveThreshold
 
-        guard let provider = context.embeddingProvider else {
+        guard let provider = layerContext.embeddingProvider else {
             MemoryLog.info(category: "Memory", "[resolve] no embedding provider - returning empty candidates")
             return entities.map {
                 ResolvedEntity(inputAssertion: $0.assertion)
@@ -859,7 +1137,8 @@ public actor Memory {
                 entity,
                 queryVector: queryVector,
                 threshold: effectiveThreshold,
-                limit: limit
+                limit: limit,
+                context: layerContext
             ))
         }
 
@@ -873,7 +1152,8 @@ public actor Memory {
         _ entity: E,
         queryVector: [Float],
         threshold: Float,
-        limit: Int
+        limit: Int,
+        context: MemoryContext
     ) async throws -> ResolvedEntity {
         let queryEmbedding = try Self.requireEmbedding(
             queryVector,
@@ -884,7 +1164,8 @@ public actor Memory {
             embedding: queryEmbedding,
             threshold: threshold,
             k: limit,
-            searchLimit: Self.resolutionSearchLimit
+            searchLimit: Self.resolutionSearchLimit,
+            context: context
         )
         return ResolvedEntity(
             inputAssertion: entity.assertion,
@@ -925,14 +1206,30 @@ public actor Memory {
     /// given witness type. Exposed for `@testable` so storage tests can assert
     /// on persisted entity counts.
     internal func _debugEntityCount<T: Persistable & Entity>(witness: T.Type) async throws -> Int {
-        try await context.databaseContext.fetchPolymorphic(T.self).count
+        try await _debugEntityCount(witness: witness, in: defaultLayer)
+    }
+
+    internal func _debugEntityCount<T: Persistable & Entity>(
+        witness: T.Type,
+        in layer: MemoryLayer
+    ) async throws -> Int {
+        let layerContext = try context(for: layer)
+        return try await layerContext.databaseContext.fetchPolymorphic(T.self).count
     }
 
     /// Fetch all entities stored under the shared polymorphic directory for
     /// the given witness type. Exposed for `@testable` so tests can inspect
     /// stored entity records.
     internal func _debugEntities<T: Persistable & Entity>(witness: T.Type) async throws -> [T] {
-        let models = try await context.databaseContext.fetchPolymorphic(T.self)
+        try await _debugEntities(witness: witness, in: defaultLayer)
+    }
+
+    internal func _debugEntities<T: Persistable & Entity>(
+        witness: T.Type,
+        in layer: MemoryLayer
+    ) async throws -> [T] {
+        let layerContext = try context(for: layer)
+        let models = try await layerContext.databaseContext.fetchPolymorphic(T.self)
         return try models.compactMap { model in
             guard model.entity == T.persistableType else { return nil }
             return try model.decode(as: T.self)
@@ -942,7 +1239,15 @@ public actor Memory {
     /// Fetch a concrete Persistable type directly (non-polymorphic).
     /// Exposed for `@testable` diagnostics.
     internal func _debugFetchAll<T: Persistable>(_ type: T.Type) async throws -> [T] {
-        try await context.databaseContext.fetch(type).execute()
+        try await _debugFetchAll(type, in: defaultLayer)
+    }
+
+    internal func _debugFetchAll<T: Persistable>(
+        _ type: T.Type,
+        in layer: MemoryLayer
+    ) async throws -> [T] {
+        let layerContext = try context(for: layer)
+        return try await layerContext.databaseContext.fetch(type).execute()
     }
 
     internal func _debugTriples(
@@ -951,7 +1256,24 @@ public actor Memory {
         predicate: String = "?predicate",
         object: String = "?object"
     ) async throws -> [(subject: String, predicate: String, object: String)] {
-        let result = try await context.databaseContext.sparql(
+        try await _debugTriples(
+            graph: graph,
+            subject: subject,
+            predicate: predicate,
+            object: object,
+            in: defaultLayer
+        )
+    }
+
+    internal func _debugTriples(
+        graph: String,
+        subject: String = "?subject",
+        predicate: String = "?predicate",
+        object: String = "?object",
+        in layer: MemoryLayer
+    ) async throws -> [(subject: String, predicate: String, object: String)] {
+        let layerContext = try context(for: layer)
+        let result = try await layerContext.databaseContext.sparql(
             namedGraph: try MemoryRDF.graphName(graph)
         )
             .where(
@@ -1029,8 +1351,16 @@ public actor Memory {
     /// commit. Used by diagnostic tests to isolate the dual-write code path
     /// from Memory's normal store logic.
     internal func _debugCommittedDirectInsert<T: Persistable & Sendable>(_ model: T) async throws {
-        try context.databaseContext.insert(model)
-        try await context.databaseContext.save()
+        try await _debugCommittedDirectInsert(model, in: defaultLayer)
+    }
+
+    internal func _debugCommittedDirectInsert<T: Persistable & Sendable>(
+        _ model: T,
+        in layer: MemoryLayer
+    ) async throws {
+        let layerContext = try context(for: layer)
+        try layerContext.databaseContext.insert(model)
+        try await layerContext.databaseContext.save()
     }
     #endif
 

@@ -2,6 +2,7 @@ import Testing
 import Foundation
 @testable import SwiftMemory
 import MemoryOntology
+import Database
 
 @Suite
 struct MemoryTests {
@@ -67,5 +68,42 @@ struct MemoryTests {
         let result = RecallResult.empty
         #expect(result.entities.isEmpty)
         #expect(result.givens.isEmpty)
+    }
+
+    @Test
+    func layerSetValidatesTopology() throws {
+        let personal = try MemoryLayer(id: "personal")
+        let shared = try MemoryLayer(id: "shared")
+
+        do {
+            _ = try MemoryLayerSet([])
+            Issue.record("A layer set must not be empty")
+        } catch MemoryLayerError.emptyLayerSet {
+            // Expected typed failure.
+        }
+
+        do {
+            _ = try MemoryLayerSet([personal, personal])
+            Issue.record("A layer set must not repeat a Base")
+        } catch MemoryLayerError.duplicateLayer(let baseID) {
+            #expect(baseID == personal.baseID)
+        }
+
+        do {
+            _ = try MemoryLayerSet([personal], default: shared)
+            Issue.record("The default layer must be configured")
+        } catch MemoryLayerError.defaultLayerNotConfigured(let baseID) {
+            #expect(baseID == shared.baseID)
+        }
+
+        let aliasedPersonal = try MemoryLayer(
+            baseID: personal.baseID,
+            name: "Alias"
+        )
+        let canonical = try MemoryLayerSet(
+            [personal, shared],
+            default: aliasedPersonal
+        )
+        #expect(canonical.defaultLayer.name == personal.name)
     }
 }

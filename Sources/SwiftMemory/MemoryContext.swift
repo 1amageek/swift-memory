@@ -9,6 +9,9 @@ public struct MemoryContext: Sendable {
     /// Database context for persistence operations.
     public let databaseContext: DatabaseContext
 
+    /// Base-backed layer selected by this context.
+    public let layer: MemoryLayer
+
     /// Named graph for this memory instance.
     public let graphName: RDFGraphName
 
@@ -28,11 +31,13 @@ public struct MemoryContext: Sendable {
 
     public init(
         databaseContext: DatabaseContext,
+        layer: MemoryLayer,
         graphName: RDFGraphName,
         embeddingProvider: (any EmbeddingProvider)? = nil,
         wallClock: any WallClock = MemoryWallClock()
     ) {
         self.databaseContext = databaseContext
+        self.layer = layer
         self.graphName = graphName
         self.embeddingProvider = embeddingProvider
         self.wallClock = wallClock
