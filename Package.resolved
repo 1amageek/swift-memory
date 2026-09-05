@@ -1,13 +1,13 @@
 {
-  "originHash" : "9a9248773fd1b2691318298c5fac21faf82ba3458d784fa47d760358e72dfb6c",
+  "originHash" : "0aabecb1a2a51b7cd5cb8223485a00c1bd8815c47c03194eb2c3ac3bd9416dc8",
   "pins" : [
     {
       "identity" : "database-framework",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/database-framework.git",
       "state" : {
-        "revision" : "61eb72b4f5f5c3da54daa432e5657c1d46a63ff2",
-        "version" : "26.819.3"
+        "revision" : "5b82b8ba0a8582512ccb646c911739751249febe",
+        "version" : "26.905.0"
       }
     },
     {
@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/database-kit.git",
       "state" : {
-        "revision" : "775facbae56d8ccbbf7024d40a8fb36da64093c2",
-        "version" : "26.819.0"
+        "revision" : "7492a39d5040bd83730a7cd84ed8de62b3f4741e",
+        "version" : "26.831.1"
       }
     },
     {
@@ -24,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/database-types.git",
       "state" : {
-        "revision" : "4b0c81a9c322cbfa5628e411ee1fa931c2890e5d",
-        "version" : "26.730.0"
+        "revision" : "d075edcb37f8a7be845c5be4d6a7a226d899505b",
+        "version" : "26.831.0"
       }
     },
     {
@@ -33,8 +33,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/fdb-swift-bindings.git",
       "state" : {
-        "revision" : "47e6b4215d331661e5cf030eac4ff206c932d6bf",
-        "version" : "0.3.3"
+        "revision" : "1b980cd76cbfe35e9d71f5ce12e1bac7c3286de3",
+        "version" : "0.4.1"
       }
     },
     {
@@ -51,8 +51,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/storage-kit.git",
       "state" : {
-        "revision" : "4c484b40424cab54132c7514c1bd309f2a60a6e4",
-        "version" : "26.820.0"
+        "revision" : "2e00d3954829e4438693a9236a4927ac739b5f09",
+        "version" : "26.905.0"
       }
     },
     {
@@ -114,8 +114,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/1amageek/swift-hnsw.git",
       "state" : {
-        "revision" : "e427a41eeb6a8190b188ebb695694ba719f3e0e8",
-        "version" : "1.1.4"
+        "revision" : "ff9ad61a28d49d7a600c92642497c20d3d5019bb",
+        "version" : "1.2.1"
       }
     },
     {

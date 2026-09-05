@@ -57,8 +57,8 @@ flattening equal identifiers across origins.
 
 ### Dependencies
 
-- **database-kit 26.819+** — static `Schema.Entity`, `@Persistable`, polymorphic metadata, `RDFTerm`, `Vector`, and `SecurityPolicy`
-- **database-framework 26.819+** — explicit `DatabaseRuntimeConfiguration`, `DatabaseContext`, SQLite/in-memory containers, vector and SPARQL execution
+- **database-kit 26.0831.1+** — static `Schema.Entity`, `@Persistable`, polymorphic metadata, `RDFTerm`, `Vector`, and `SecurityPolicy`
+- **database-framework 26.0905.0+** — explicit `DatabaseRuntimeConfiguration`, `DatabaseContext`, SQLite/in-memory containers, vector and SPARQL execution
 - **swift-hoot** — HOOT compact format for OWL ontology serialization (~1/3 tokens vs Turtle)
 
 ### Database Runtime Contract
@@ -67,7 +67,7 @@ flattening equal identifiers across origins.
 - Every schema entity has a matching `EntityRuntimeRegistration`.
 - Every registered client `Entity` supplies a `SecurityPolicy`; policy evaluation remains enabled.
 - MultiBase grants require an authenticated principal; anonymous initialization fails explicitly.
-- A legacy `singleDatabase` physical root requires explicit export/import migration and is never silently opened as MultiBase.
+- A legacy or unformatted nonempty root fails with the upstream typed `StorageError.incompatibleStorageLayout`; export/import migration is explicit and never silently opened as MultiBase.
 - Database and memory use the same explicit monotonic and wall clocks.
 - Persisted vectors use `DatabaseTypes.Vector`; convert provider `[Float]` output only at the persistence boundary.
 - Graph fields and queries remain typed as `RDFTerm`, `RDFGraphName`, and explicit SPARQL execution terms.

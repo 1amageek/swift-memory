@@ -9,6 +9,4 @@ public enum MemoryLayerError: Error, Sendable, Equatable {
     case defaultLayerNotConfigured(Base.ID)
     case layerNotConfigured(Base.ID)
     case authenticatedPrincipalRequired
-    case singleDatabaseMigrationRequired
-    case unexpectedRootStorageLayout(DatabaseStorageLayoutKind)
 }

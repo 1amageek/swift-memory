@@ -119,10 +119,12 @@ not delete its Base. Call `shutdown()` before releasing path-backed storage or
 reopening the same file with another configuration.
 
 The physical layout changed from Database Framework `singleDatabase` to
-`multiBase`. Existing single-database files fail with
-`MemoryLayerError.singleDatabaseMigrationRequired`; they are never opened or
-silently reinterpreted as MultiBase. Export/import migration must be performed
-explicitly before those files are reused.
+`multiBase`. Existing single-database files and old `swift-memory` MultiBase
+files that use the former tuple-namespace descriptor fail with
+`StorageError.incompatibleStorageLayout`; they are never opened or silently
+reinterpreted as the current MultiBase format. Current Directory-format files
+reopen normally. Export/import migration must be performed explicitly before
+legacy files are reused.
 
 ### RecallQuery
 
@@ -270,10 +272,13 @@ typed row and recall identity statements. Explicit batch statements use
 literal, and aliases resolved to stored entities remain resource-to-resource
 graph edges.
 
-## Database Framework 26.819 Migration
+## Database Framework 26.819 Migration (Historical)
 
-This release migrates from the runtime-metatype/FDB-oriented API to Database
-Framework's static schema and explicit runtime model.
+The earlier 26.819 migration moved this package from the runtime-metatype/
+FDB-oriented API to Database Framework's static schema and explicit runtime
+model. The current package baseline is Database Framework 26.0905.0 and
+DatabaseKit 26.0831.1; the physical-layout admission rules above apply to
+stores created or reopened on that baseline.
 
 | Before | Current contract |
 |---|---|

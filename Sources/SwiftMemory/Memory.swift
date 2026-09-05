@@ -105,9 +105,8 @@ public actor Memory {
 
         let storageTopology: DatabaseStorageTopology
         do {
-            storageTopology = try await MemoryDatabaseBootstrap.localTopology(
-                storageEngine: storageEngine,
-                monotonicClock: monotonicClock
+            storageTopology = try MemoryDatabaseBootstrap.localTopology(
+                storageEngine: storageEngine
             )
         } catch {
             await storageEngine.shutdown()
@@ -158,9 +157,8 @@ public actor Memory {
             entityRegistrations: entityRegistrations
         )
         let graph = try MemoryRDF.graphName(graphName)
-        let storageTopology = try await MemoryDatabaseBootstrap.localTopology(
-            storageEngine: storageEngine,
-            monotonicClock: monotonicClock
+        let storageTopology = try MemoryDatabaseBootstrap.localTopology(
+            storageEngine: storageEngine
         )
         let runtime = try await MemoryDatabaseBootstrap.open(
             schema: schema,

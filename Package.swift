@@ -12,12 +12,12 @@ let package = Package(
     dependencies: [
         .package(
             url: "https://github.com/1amageek/database-kit.git",
-            from: "26.0819.0",
+            from: "26.0831.1",
             traits: ["MultiBase"]
         ),
         .package(
             url: "https://github.com/1amageek/database-framework.git",
-            from: "26.0819.3",
+            from: "26.0905.0",
             traits: ["SQLite", "VectorIndexes", "GraphIndexes", "MultiBase"]
         ),
         .package(

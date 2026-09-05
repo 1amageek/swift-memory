@@ -2,7 +2,7 @@
 import MemoryOntology
 
 enum MemoryDatabaseBootstrap {
-    private static let namespacePath = ["swift-memory"]
+    private static let rootPath = ["swift-memory"]
 
     static func requireAuthenticatedPrincipal(
         _ authorization: AuthorizationContext
@@ -14,14 +14,8 @@ enum MemoryDatabaseBootstrap {
     }
 
     static func localTopology(
-        storageEngine: any StorageEngine,
-        monotonicClock: any StorageMonotonicClock
-    ) async throws -> DatabaseStorageTopology {
-        try await rejectSingleDatabaseRoot(
-            storageEngine: storageEngine,
-            monotonicClock: monotonicClock
-        )
-
+        storageEngine: any StorageEngine
+    ) throws -> DatabaseStorageTopology {
         let domainID = try DatabaseStorageDomain.ID("swift-memory-local")
         let placementID = try Base.Placement.ID("layers")
         return try DatabaseStorageTopology(
@@ -29,15 +23,14 @@ enum MemoryDatabaseBootstrap {
             domains: [
                 try DatabaseStorageDomain(
                     id: domainID,
-                    namespacePath: namespacePath,
+                    rootPath: rootPath,
                     storageEngine: storageEngine
                 )
             ],
             placements: [
-                try DatabaseStoragePlacement(
+                DatabaseStoragePlacement(
                     id: placementID,
-                    domainID: domainID,
-                    path: ["layers"]
+                    domainID: domainID
                 )
             ],
             defaultPlacementID: placementID
@@ -110,76 +103,4 @@ enum MemoryDatabaseBootstrap {
         }
     }
 
-    private static func rejectSingleDatabaseRoot(
-        storageEngine: any StorageEngine,
-        monotonicClock: any StorageMonotonicClock
-    ) async throws {
-        do {
-            let descriptor = try await DatabaseFormatCatalog(
-                database: storageEngine,
-                clock: monotonicClock
-            ).loadRequired()
-            switch descriptor.layoutKind {
-            case .singleDatabase:
-                throw MemoryLayerError.singleDatabaseMigrationRequired
-            case .multiBase:
-                throw MemoryLayerError.unexpectedRootStorageLayout(
-                    descriptor.layoutKind
-                )
-            }
-        } catch DatabaseFormatCatalogError.missingDescriptor {
-            // Continue below. Current MultiBase stores keep their descriptor
-            // under the configured domain namespace, not at the engine root.
-        }
-
-        var namespaceRoot = Subspace()
-        for component in namespacePath {
-            namespaceRoot = namespaceRoot.subspace(component)
-        }
-        do {
-            let descriptor = try await DatabaseFormatCatalog(
-                database: storageEngine,
-                root: namespaceRoot,
-                clock: monotonicClock
-            ).loadRequired()
-            switch descriptor.layoutKind {
-            case .multiBase:
-                return
-            case .singleDatabase:
-                throw MemoryLayerError.singleDatabaseMigrationRequired
-            }
-        } catch DatabaseFormatCatalogError.missingDescriptor {
-            guard try await containsAnyRootKey(
-                storageEngine: storageEngine,
-                monotonicClock: monotonicClock
-            ) else {
-                return
-            }
-            throw MemoryLayerError.singleDatabaseMigrationRequired
-        }
-    }
-
-    private static func containsAnyRootKey(
-        storageEngine: any StorageEngine,
-        monotonicClock: any StorageMonotonicClock
-    ) async throws -> Bool {
-        let range = Subspace().range()
-        return try await StorageTransactionExecutor(
-            engine: storageEngine
-        ).withTransaction(
-            configuration: .default,
-            clock: monotonicClock
-        ) { transaction in
-            let rows = try await TransactionRangeCollection.collect(
-                using: transaction,
-                from: .firstGreaterOrEqual(range.begin),
-                to: .firstGreaterOrEqual(range.end),
-                limit: 1,
-                reverse: false,
-                snapshot: true,
-                streamingMode: .small
-            )
-            return !rows.isEmpty
-        }
-    }
 }

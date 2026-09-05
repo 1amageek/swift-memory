@@ -225,27 +225,87 @@ struct MemoryLayerIntegrationTests {
         do {
             _ = try await Memory(storageEngine: engine)
             Issue.record("Single-database storage must not be opened as MultiBase")
-        } catch MemoryLayerError.singleDatabaseMigrationRequired {
-            // Expected typed migration boundary.
+        } catch let error as StorageError {
+            #expect(error.code == .incompatibleStorageLayout)
         }
         await engine.shutdown()
     }
 
-    @Test("A descriptorless nonempty root requires explicit migration")
+    @Test("A descriptorless nonempty root is rejected without mutation")
     func descriptorlessRootRequiresMigration() async throws {
-        let engine = InMemoryEngine()
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "swift-memory-layout-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: false
+        )
+        let path = directory.appending(path: "memory.sqlite").path
+        let lowKey: ByteString = [0x01]
+        let lowValue: ByteString = [0x11]
+        let highKey: ByteString = [0xFF]
+        let highValue: ByteString = [0xEE]
+        let engine = try SQLiteStorageEngine(configuration: .file(path))
         _ = try await StorageTransactionExecutor(engine: engine).withTransaction(
             configuration: .default,
             clock: MemoryMonotonicClock()
         ) { transaction in
-            try transaction.setValue([0x01], for: [0x01])
+            try transaction.setValue(lowValue, for: lowKey)
+            try transaction.setValue(highValue, for: highKey)
+        }
+        await engine.shutdown()
+
+        do {
+            _ = try await Memory(path: path)
+            Issue.record("Unknown nonempty storage must not be claimed as MultiBase")
+        } catch let error as StorageError {
+            #expect(error.code == .incompatibleStorageLayout)
+        }
+
+        let reopenedEngine = try SQLiteStorageEngine(configuration: .file(path))
+        let entries = try await StorageTransactionExecutor(engine: reopenedEngine)
+            .withTransaction(
+                configuration: .default,
+                clock: MemoryMonotonicClock()
+            ) { transaction in
+                try await TransactionRangeCollection.collect(
+                    using: transaction,
+                    from: .firstGreaterOrEqual([]),
+                    to: .firstGreaterThan([0xFF]),
+                    limit: 16,
+                    reverse: false,
+                    snapshot: true,
+                    streamingMode: .small
+                )
+            }
+        #expect(entries.map { Array($0.0) } == [[0x01], [0xFF]])
+        #expect(entries.map { Array($0.1) } == [[0x11], [0xEE]])
+        await reopenedEngine.shutdown()
+        try FileManager.default.removeItem(at: directory)
+    }
+
+    @Test("A legacy tuple-namespace MultiBase root is rejected")
+    func legacyTupleNamespaceRootRequiresMigration() async throws {
+        let engine = InMemoryEngine()
+        let descriptor = DatabaseFormatDescriptor.current(
+            layoutKind: .multiBase,
+            itemStorage: .v1
+        )
+        let descriptorKey = Subspace()
+            .subspace("swift-memory")
+            .subspace("_database-framework")
+            .pack(Tuple("format"))
+        _ = try await StorageTransactionExecutor(engine: engine).withTransaction(
+            configuration: .default,
+            clock: MemoryMonotonicClock()
+        ) { transaction in
+            try transaction.setValue(descriptor.serialize(), for: descriptorKey)
         }
 
         do {
             _ = try await Memory(storageEngine: engine)
-            Issue.record("Unknown nonempty storage must not be claimed as MultiBase")
-        } catch MemoryLayerError.singleDatabaseMigrationRequired {
-            // Expected typed migration boundary.
+            Issue.record("Legacy tuple-namespace storage must not be adopted")
+        } catch let error as StorageError {
+            #expect(error.code == .incompatibleStorageLayout)
         }
         await engine.shutdown()
     }

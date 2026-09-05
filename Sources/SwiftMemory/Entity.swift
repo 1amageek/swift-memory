@@ -25,11 +25,6 @@ import DatabaseKit
 /// `assertion` is used only for candidate retrieval; final identity judgment
 /// should be made by the caller using returned candidates and graph context.
 ///
-/// **Storage Layout**:
-/// ```
-/// [memory/entities]/R/[typeCode]/[id]                                   -> protobuf
-/// [memory/entities]/I/Entity_vector_embedding/[vector]/[typeCode]/[id]  -> empty
-/// ```
 @Polymorphable(identifier: "Entity")
 @PolymorphicDirectory("memory", "entities")
 @PolymorphicIndex(
@@ -94,7 +89,7 @@ extension Entity where Self: Persistable, Self.ID == String {
 
 extension Entity where Self: Persistable {
     static func persistedEmbeddingField() throws -> Field<Self, Vector> {
-        guard let schema = fieldSchemas.first(where: { $0.name == "embedding" }),
+        guard let schema = try fieldSchemas.first(where: { $0.name == "embedding" }),
               schema.type == .vector,
               !schema.isOptional,
               !schema.isArray else {
